@@ -1,0 +1,541 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>任务清单</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 自定义标题栏（Electron 无边框模式专用） -->
+  <div id="titlebar">
+    <div id="titlebar-drag">
+      <span id="titlebar-title">任务清单</span>
+      <span id="desktop-mode-badge" class="hidden">📌 已固定</span>
+    </div>
+    <div id="titlebar-controls">
+      <!-- 桌面模式切换按钮 -->
+      <button class="titlebar-btn desktop-toggle" id="desktop-toggle-btn" title="桌面模式">
+        <span id="desktop-toggle-icon">📌</span>
+        <span id="desktop-toggle-text">桌面模式</span>
+      </button>
+      <!-- 窗口控制按钮 -->
+      <button class="titlebar-btn" id="titlebar-minimize" title="最小化">─</button>
+      <button class="titlebar-btn" id="titlebar-maximize" title="最大化">□</button>
+      <button class="titlebar-btn close-btn" id="titlebar-close" title="关闭">✕</button>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- 顶部标题栏（可拖动） -->
+    <div id="header">
+      <div id="header-left">
+        <button class="nav-btn" id="prevMonth" title="上一月">&#8249;</button>
+      </div>
+      <div id="header-center">
+        <span id="year-month"></span>
+        <span id="lunar-info"></span>
+      </div>
+      <div id="header-right">
+        <button class="nav-btn" id="nextMonth" title="下一月">&#8250;</button>
+        <button class="icon-btn" id="todayBtn" title="回到今天">今</button>
+        <button class="icon-btn" id="settingsBtn" title="设置">⚙</button>
+      </div>
+    </div>
+
+    <!-- 星期头 -->
+    <div id="weekdays">
+      <div class="weekday">星期一</div>
+      <div class="weekday">星期二</div>
+      <div class="weekday">星期三</div>
+      <div class="weekday">星期四</div>
+      <div class="weekday">星期五</div>
+      <div class="weekday weekend">星期六</div>
+      <div class="weekday weekend">星期日</div>
+    </div>
+
+    <!-- 日历格子区域 -->
+    <div id="calendar-grid"></div>
+
+    <!-- 右下角拖拽调整大小手柄 -->
+    <div id="resize-handle" title="拖动调整大小"></div>
+  </div>
+
+  <!-- 任务编辑浮窗（纯文本编辑模式） -->
+  <div id="task-popup" class="hidden">
+    <!-- 浮窗标题栏 -->
+    <div class="popup-header" id="popup-header">
+      <div class="popup-title-wrap">
+        <span id="popup-date-title"></span>
+        <span id="popup-lunar"></span>
+      </div>
+      <button class="popup-close" id="popup-close" title="关闭">✕</button>
+    </div>
+
+    <!-- 纯文本编辑区（类似 txt） -->
+    <div class="popup-body">
+      <textarea id="popup-textarea" placeholder="每行一个任务，完成后点击空白处保存..."></textarea>
+    </div>
+
+    <!-- 浮窗底部按钮 -->
+    <div class="popup-footer">
+      <button class="popup-action-btn" id="popup-done-btn" title="标记完成">
+        <span class="btn-icon">✓</span>
+        <span class="btn-text">完成</span>
+      </button>
+    </div>
+  </div>
+
+    <!-- 设置面板 - Tab版本 -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-overlay" id="settings-overlay"></div>
+    <div class="modal-box settings-box settings-tabbed">
+      <div class="modal-header">
+        <span>⚙ 任务清单 - 设置</span>
+        <button class="modal-close" id="settings-close">✕</button>
+      </div>
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="calendar">日历</button>
+        <button class="settings-tab" data-tab="cell">单元格</button>
+        <button class="settings-tab" data-tab="advanced">高级</button>
+        <button class="settings-tab" data-tab="about">关于</button>
+      </div>
+      <div class="modal-body settings-content">
+
+        <!-- 日历 Tab -->
+        <div class="settings-panel active" id="panel-calendar">
+          <div class="settings-group">
+            <div class="settings-group-title">显示</div>
+            <div class="settings-row">
+              <label>首列星期</label>
+              <select id="week-start-select">
+                <option value="1" selected>星期一</option>
+                <option value="0">星期日</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>显示周数</label>
+              <select id="display-weeks-select">
+                <option value="3">3周</option>
+                <option value="4">4周</option>
+                <option value="5" selected>5周</option>
+                <option value="6">6周</option>
+                <option value="8">8周</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>已过星期数</label>
+              <select id="past-weeks-select">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">外观</div>
+            <div class="settings-row">
+              <label>日历背景颜色</label>
+              <div class="color-input-wrap">
+                <input type="color" id="bg-color-picker" value="#0d1117" />
+                <button class="reset-btn" id="reset-bg-color" title="恢复默认">重置</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <label>字体颜色</label>
+              <div class="color-input-wrap">
+                <input type="color" id="font-color-picker" value="#e0e8f0" />
+                <button class="reset-btn" id="reset-font-color" title="恢复默认">重置</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">显示选项（复选框）</div>
+            <div class="settings-checkbox-grid">
+              <div><label class="checkbox-label"><input type="checkbox" id="show-shadow" /><span>显示阴影</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-week-num" /><span>显示周数</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-month-gaps" checked /><span>显示月间隔</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-today-marker" checked /><span>显示今日标记栏</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-lunar" checked /><span>显示重要节日</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-solarterm" checked /><span>显示二十四节气</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-calendar" checked /><span>显示农历</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-legal-rest" checked /><span>显示法定休息日</span></label></div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">主题预设</div>
+            <div class="settings-row">
+              <label>主题颜色</label>
+              <div class="theme-options" id="theme-options">
+                <div class="theme-dot" data-theme="dark" style="background:#1a1a2e" title="深蓝夜空"></div>
+                <div class="theme-dot" data-theme="black" style="background:#0d0d0d" title="纯黑"></div>
+                <div class="theme-dot" data-theme="forest" style="background:#0f2d1f" title="深林绿"></div>
+                <div class="theme-dot" data-theme="purple" style="background:#1a0a2e" title="紫色魅惑"></div>
+                <div class="theme-dot" data-theme="blue" style="background:#0a1628" title="深海蓝"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-footer-bar">
+            <button class="restore-default-link" id="calendar-restore-default">恢复默认以设置</button>
+          </div>
+        </div>
+
+        <!-- 单元格 Tab -->
+        <div class="settings-panel" id="panel-cell">
+          <div class="settings-group">
+            <div class="settings-group-title">尺寸与间距</div>
+            <div class="settings-row">
+              <label>透明度</label>
+              <div class="slider-row">
+                <input type="range" id="cell-opacity-slider" min="5" max="100" step="1" value="85">
+                <span id="cell-opacity-value" style="min-width:36px;text-align:right;margin-left:6px;font-size:13px;">85%</span>
+              </div>
+            </div>
+            <div class="settings-row">
+              <label>单元格间隙</label>
+              <select id="cell-gap-select">
+                <option value="0">0</option>
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>自动编号</label>
+              <select id="auto-number-select">
+                <option value="none" selected>不编号</option>
+                <option value="dot">以点为标示</option>
+                <option value="number">数字序号</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>任务显示行数</label>
+              <select id="task-line-clamp-select">
+                <option value="0" selected>无限制</option>
+                <option value="1">1 行</option>
+                <option value="2">2 行</option>
+                <option value="3">3 行</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">颜色</div>
+            <div class="settings-row">
+              <label>今日框颜色</label>
+              <div class="color-input-wrap">
+                <input type="color" id="today-color-picker" value="#ffd700" />
+                <button class="reset-btn" id="reset-today-color" title="恢复默认">重置</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <label>今日框粗细</label>
+              <select id="today-outline-select">
+                <option value="1">1px（细）</option>
+                <option value="2">2px</option>
+                <option value="3" selected>3px（默认）</option>
+                <option value="5">5px（粗）</option>
+                <option value="7">7px（特粗）</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>字体大小颜色</label>
+              <div class="color-input-wrap">
+                <input type="color" id="task-font-color-picker" value="#b8d4f0" />
+                <button class="reset-btn" id="reset-task-font-color" title="恢复默认">重置</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">字号</div>
+            <div class="settings-row">
+              <label>任务字号</label>
+              <select id="font-size-select">
+                <option value="12">12px</option>
+                <option value="13">13px</option>
+                <option value="14">14px</option>
+                <option value="15">15px</option>
+                <option value="16" selected>16px</option>
+                <option value="18">18px</option>
+                <option value="20">20px</option>
+                <option value="22">22px</option>
+                <option value="24">24px</option>
+                <option value="26">26px</option>
+                <option value="28">28px</option>
+                <option value="30">30px</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>日期字号</label>
+              <select id="date-size-select">
+                <option value="10">10px</option>
+                <option value="11">11px</option>
+                <option value="12">12px</option>
+                <option value="14" selected>14px</option>
+                <option value="16">16px</option>
+                <option value="18">18px</option>
+                <option value="20">20px</option>
+                <option value="22">22px</option>
+                <option value="24">24px</option>
+                <option value="26">26px</option>
+                <option value="28">28px</option>
+                <option value="30">30px</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">行为</div>
+            <div class="settings-checkbox-grid">
+              <div><label class="checkbox-label"><input type="checkbox" id="edit-auto-scroll" checked /><span>编辑完成自动排到末尾</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="undo-week-auto-delete" /><span>未完成一周内自动驱赶</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="edit-complete-sound" checked /><span>编辑完成提示音</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="edit-reminder-sound" checked /><span>提醒通知提示音</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="display-toast-tip" /><span>显示温馨提示</span></label></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 高级 Tab -->
+        <div class="settings-panel" id="panel-advanced">
+          <div class="settings-group">
+            <div class="settings-group-title">基本设置</div>
+            <div class="settings-row">
+              <label>开始星期</label>
+              <select id="adv-week-start-select">
+                <option value="1" selected>星期一</option>
+                <option value="0">星期日</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>设置第一周</label>
+              <select id="first-week-select">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>语言</label>
+              <select id="language-select">
+                <option value="zh-CN" selected>中国大陆 - 简体中文</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">每周休息日</div>
+            <div class="settings-checkbox-grid">
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="1" /><span>星期一</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="2" /><span>星期二</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="3" /><span>星期三</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="4" /><span>星期四</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="5" /><span>星期五</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="6" checked /><span>星期六</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" name="rest-day" data-day="0" checked /><span>星期日</span></label></div>
+            </div>
+            <div class="settings-row" style="margin-top:8px;">
+              <label>显示休息日</label>
+              <input type="checkbox" id="show-rest-days" checked />
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">系统与快捷键</div>
+            <div class="settings-checkbox-grid">
+              <div><label class="checkbox-label"><input type="checkbox" id="auto-startup" /><span>跟随 Windows 启动</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="auto-check-update" checked /><span>自动检查更新</span></label></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="show-shortcut-key" checked /><span>显示隐藏日历快捷键</span></label></div>
+            </div>
+            <div class="settings-row" id="shortcut-key-display-row" style="margin-top:8px;">
+              <label>隐藏/显示快捷键</label>
+              <span class="shortcut-key-display">Ctrl+Alt+H</span>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">AI 对接</div>
+            <div class="settings-row">
+              <label>导出 Skill</label>
+              <button id="skill-export-btn" class="action-btn primary">📋 生成一键指令</button>
+            </div>
+            <div class="settings-hint-row">生成后可让 AI 直接操作日历任务</div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">数据管理</div>
+            <div class="settings-row">
+              <label>导出数据</label>
+              <div class="export-options">
+                <select id="export-format">
+                  <option value="txt">txt</option>
+                  <option value="xlsx">xlsx</option>
+                  <option value="calendartask" selected>ctdb</option>
+                </select>
+                <select id="export-range">
+                  <option value="all">全部</option>
+                  <option value="6months">近6个月</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <button id="export-data-btn" class="action-btn">导出</button>
+              </div>
+            </div>
+            <div class="export-custom-range hidden" id="export-custom-range">
+              <div class="settings-row">
+                <label>开始</label>
+                <input type="date" id="export-start-date" />
+              </div>
+              <div class="settings-row">
+                <label>结束</label>
+                <input type="date" id="export-end-date" />
+              </div>
+            </div>
+            <div class="settings-row">
+              <label>导入数据</label>
+              <div class="import-options">
+                <select id="import-format">
+                  <option value="auto">自动识别</option>
+                  <option value="txt">txt</option>
+                  <option value="xlsx">xlsx</option>
+                  <option value="calendartask">ctdb</option>
+                  <option value="db">db 原版</option>
+                </select>
+                <button id="import-data-btn" class="action-btn">选择文件</button>
+                <input type="file" id="import-file-input" class="hidden" accept=".txt,.xlsx,.ctdb,.json,.db" />
+              </div>
+            </div>
+            <div class="settings-row danger-row">
+              <label>清除所有数据</label>
+              <button id="clear-all-btn" class="danger-btn">清除</button>
+            </div>
+          </div>
+
+          <!-- 日志查看器（默认折叠） -->
+          <div class="settings-group">
+            <div class="settings-group-title">
+              📋 运行日志
+              <span id="log-summary-badge" style="font-size:11px;color:#888;margin-left:6px;"></span>
+            </div>
+            <div class="log-toggle-row">
+              <label>过滤</label>
+              <select id="log-filter-level">
+                <option value="">全部级别</option>
+                <option value="event">事件</option>
+                <option value="info">信息</option>
+                <option value="warn">警告</option>
+                <option value="error">错误</option>
+              </select>
+              <select id="log-filter-category">
+                <option value="">全部分类</option>
+                <option value="init">初始化</option>
+                <option value="setting">设置</option>
+                <option value="render">渲染</option>
+                <option value="data">数据</option>
+                <option value="sync">同步</option>
+                <option value="ui">UI</option>
+                <option value="error">错误</option>
+                <option value="system">系统</option>
+              </select>
+              <button id="log-clear-btn" class="action-btn danger-btn" style="margin-left:4px;padding:2px 10px;font-size:12px;">清空</button>
+              <button id="log-toggle-btn" class="action-btn" style="margin-left:4px;padding:2px 10px;font-size:12px;">展开 ▼</button>
+            </div>
+            <div id="log-viewer-container" class="hidden" style="max-height:260px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border-color);border-radius:6px;padding:8px;font-family:'Consolas','Courier New',monospace;font-size:11.5px;line-height:1.7;white-space:pre-wrap;word-break:break-all;">
+              <span style="color:#666;">（暂无日志或点击刷新）</span>
+            </div>
+          </div>
+
+
+          <div class="settings-footer-bar">
+            <button class="restore-default-link" id="advanced-restore-default">恢复默认以设置</button>
+          </div>
+        </div>
+
+        <!-- 关于 Tab -->
+        <div class="settings-panel" id="panel-about">
+          <div class="about-header-area">
+            <h2 class="about-app-name">任务清单</h2>
+            <p class="about-version">v9.6.0 (2026-04-18)</p>
+            <p class="about-copyright">Copyright &copy; 2026 爆肝. All rights reserved.</p>
+          </div>
+
+          <div class="settings-group">
+            <div class="about-links">
+              <a href="#" class="about-link" id="about-feature-intro">功能介绍</a>
+              <a href="#" class="about-link" id="about-faq">常见问题</a>
+              <a href="#" class="about-link" id="about-changelog">更新日志</a>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="donate-area">
+              <div class="donate-qr" id="donate-qr-img"></div>
+              <div class="donate-caption">微信打赏，感谢支持 ❤️</div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">快捷键一览</div>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>←</kbd><kbd>→</kbd> 翻页</div>
+              <div class="shortcut-item"><kbd>双击</kbd> 编辑任务</div>
+              <div class="shortcut-item"><kbd>右键</kbd> 上下文菜单</div>
+              <div class="shortcut-item"><kbd>Esc</kbd> 关闭弹窗</div>
+              <div class="shortcut-item"><kbd>滚轮</kbd> 翻页</div>
+              <div class="shortcut-item"><kbd>Ctrl+Alt+H</kbd> 隐藏/显示窗口</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+<!-- 右键菜单 -->
+  <div id="context-menu" class="hidden">
+    <div class="ctx-item" id="ctx-edit">✏️ 编辑任务</div>
+    <div class="ctx-item" id="ctx-color">🎨 设置颜色</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item danger" id="ctx-clear">🗑️ 清空当天</div>
+  </div>
+
+  <script>
+(function(global) {
+  'use strict';
+  var lunarInfo = [0x04bd8,0x04ae0,0x0a570,0x054d5,0x0d260,0x0d950,0x16554,0x056a0,0x09ad0,0x055d2,0x04ae0,0x0a5b6,0x0a4d0,0x0d250,0x1d255,0x0b540,0x0d6a0,0x0ada2,0x095b0,0x14977,0x04970,0x0a4b0,0x0b4b5,0x06a50,0x06d40,0x1ab54,0x02b60,0x09570,0x052f2,0x04970,0x06566,0x0d4a0,0x0ea50,0x06e95,0x05ad0,0x02b60,0x186e3,0x092e0,0x1c8d7,0x0c950,0x0d4a0,0x1d8a6,0x0b550,0x056a0,0x1a5b4,0x025d0,0x092d0,0x0d2b2,0x0a950,0x0b557,0x06ca0,0x0b550,0x15355,0x04da0,0x0a5d0,0x14573,0x052d0,0x0a9a8,0x0e950,0x06aa0,0x0aea6,0x0ab50,0x04b60,0x0aae4,0x0a570,0x05260,0x0f263,0x0d950,0x05b57,0x056a0,0x096d0,0x04dd5,0x04ad0,0x0a4d0,0x0d4d4,0x0d250,0x0d558,0x0b540,0x0b5a0,0x195a6,0x095b0,0x049b0,0x0a974,0x0a4b0,0x0b27a,0x06a50,0x06d40,0x0af46,0x0ab60,0x09570,0x04af5,0x04970,0x064b0,0x074a3,0x0ea50,0x06b58,0x055c0,0x0ab60,0x096d5,0x092e0,0x0c960,0x0d954,0x0d4a0,0x0da50,0x07552,0x056a0,0x0abb7,0x025d0,0x092d0,0x0cab5,0x0a950,0x0b4a0,0x0baa4,0x0ad50,0x055d9,0x04ba0,0x0a5b0,0x15176,0x052b0,0x0a930,0x07954,0x06aa0,0x0ad50,0x05b52,0x04b60,0x0a6e6,0x0a4e0,0x0d260,0x0ea65,0x0d530,0x05aa0,0x076a3,0x096d0,0x04bd7,0x04ad0,0x0a4d0,0x1d0b6,0x0d250,0x0d520,0x0dd45,0x0b5a0,0x056d0,0x055b2,0x049b0,0x0a577,0x0a4b0,0x0aa50,0x1b255,0x06d20,0x0ada0,0x14b63,0x09370,0x049f8,0x04970,0x064b0,0x168a6,0x0ea50,0x06b20,0x1a6c4,0x0aae0,0x0a2e0,0x0d2e3,0x0c960,0x0d557,0x0d4a0,0x0da50,0x05d55,0x056a0,0x0a6d0,0x055d4,0x052d0,0x0a9b8,0x0a950,0x0b4a0,0x0b6a6,0x0ad50,0x055a0,0x0aba4,0x0a5b0,0x052b0,0x0b273,0x06930,0x07337,0x06aa0,0x0ad50,0x14b55,0x04b60,0x0a570,0x054e4,0x0d160,0x0e968,0x0d520,0x0daa0,0x16aa6,0x056d0,0x04ae0,0x0a9d4,0x0a2d0,0x0d150,0x0f252];
+  var Gan=['甲','乙','丙','丁','戊','己','庚','辛','壬','癸'];
+  var Zhi=['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥'];
+  var Animals=['鼠','牛','虎','兔','龙','蛇','马','羊','猴','鸡','狗','猪'];
+  var lunarMonths=['正','二','三','四','五','六','七','八','九','十','冬','腊'];
+  var lunarDays=['初一','初二','初三','初四','初五','初六','初七','初八','初九','初十','十一','十二','十三','十四','十五','十六','十七','十八','十九','二十','廿一','廿二','廿三','廿四','廿五','廿六','廿七','廿八','廿九','三十'];
+  var SOLAR_TERMS_TABLE={2024:{'1-6':'小寒','1-20':'大寒','2-4':'立春','2-19':'雨水','3-5':'惊蛰','3-20':'春分','4-4':'清明','4-19':'谷雨','5-5':'立夏','5-20':'小满','6-5':'芒种','6-21':'夏至','7-6':'小暑','7-22':'大暑','8-7':'立秋','8-22':'处暑','9-7':'白露','9-22':'秋分','10-8':'寒露','10-23':'霜降','11-7':'立冬','11-22':'小雪','12-6':'大雪','12-21':'冬至'},2025:{'1-5':'小寒','1-20':'大寒','2-3':'立春','2-18':'雨水','3-5':'惊蛰','3-20':'春分','4-4':'清明','4-20':'谷雨','5-5':'立夏','5-21':'小满','6-5':'芒种','6-21':'夏至','7-7':'小暑','7-22':'大暑','8-7':'立秋','8-22':'处暑','9-7':'白露','9-23':'秋分','10-8':'寒露','10-23':'霜降','11-7':'立冬','11-22':'小雪','12-7':'大雪','12-22':'冬至'},2026:{'1-5':'小寒','1-20':'大寒','2-4':'立春','2-19':'雨水','3-6':'惊蛰','3-21':'春分','4-5':'清明','4-20':'谷雨','5-5':'立夏','5-21':'小满','6-6':'芒种','6-21':'夏至','7-7':'小暑','7-23':'大暑','8-7':'立秋','8-23':'处暑','9-8':'白露','9-23':'秋分','10-8':'寒露','10-23':'霜降','11-7':'立冬','11-22':'小雪','12-7':'大雪','12-22':'冬至'},2027:{'1-6':'小寒','1-20':'大寒','2-3':'立春','2-18':'雨水','3-6':'惊蛰','3-21':'春分','4-5':'清明','4-20':'谷雨','5-6':'立夏','5-21':'小满','6-6':'芒种','6-21':'夏至','7-7':'小暑','7-23':'大暑','8-7':'立秋','8-23':'处暑','9-8':'白露','9-23':'秋分','10-8':'寒露','10-23':'霜降','11-7':'立冬','11-22':'小雪','12-7':'大雪','12-22':'冬至'}};
+  function getSolarTerm(year,month,day){var table=SOLAR_TERMS_TABLE[year];if(!table)return null;var key=month+'-'+day;return table[key]||null}
+  function lunarMonthDays(lunarYear,lunarMonth){if((lunarInfo[lunarYear-1900]&(0x10000>>lunarMonth))===0)return 29;return 30}
+  function leapMonth(lunarYear){return lunarInfo[lunarYear-1900]&0xf}
+  function leapDays(lunarYear){if(leapMonth(lunarYear)){return(lunarInfo[lunarYear-1900]&0x10000)?30:29}return 0}
+  function yearDays(lunarYear){var sum=348;for(var i=0x8000;i>0x8;i>>=1){if((lunarInfo[lunarYear-1900]&i)!==0)sum+=1}return sum+leapDays(lunarYear)}
+  function solar2lunar(date){var baseDate=new Date(1900,0,31);var offset=Math.floor((date-baseDate)/86400000);if(offset<0)return null;var lunarYear,lunarMonth,lunarDay;var leap=0,isLeap=false;var temp=0;for(lunarYear=1900;lunarYear<2101&&offset>0;lunarYear++){temp=yearDays(lunarYear);offset-=temp}if(offset<0){offset+=temp;lunarYear--}var leapM=leapMonth(lunarYear);for(lunarMonth=1;lunarMonth<13&&offset>0;lunarMonth++){if(leapM>0&&lunarMonth===(leapM+1)&&leap===0){lunarMonth--;leap=1;temp=leapDays(lunarYear)}else{temp=lunarMonthDays(lunarYear,lunarMonth)}if(leap===1&&lunarMonth===(leapM+1))leap=0;offset-=temp}if(offset===0&&leapM>0&&lunarMonth===leapM+1){if(leap){leap=0}else{leap=1;lunarMonth--}}if(offset<0){offset+=temp;lunarMonth--}lunarDay=offset+1;isLeap=leap===1;var ganIdx=(lunarYear-4)%10;var zhiIdx=(lunarYear-4)%12;return{lunarYear:lunarYear,lunarMonth:lunarMonth,lunarDay:lunarDay,isLeap:isLeap,lunarDayStr:lunarDays[lunarDay-1],lunarMonthStr:(isLeap?'闰':'')+lunarMonths[lunarMonth-1]+'月',ganZhi:Gan[ganIdx<0?ganIdx+10:ganIdx]+Zhi[zhiIdx<0?zhiIdx+12:zhiIdx],zodiac:Animals[zhiIdx<0?zhiIdx+12:zhiIdx]}}
+  global.LunarCalendar={solar2lunar:solar2lunar,getSolarTerm:getSolarTerm};
+})(window);
+  </script>
+  <script>
+(function(global) {
+  'use strict';
+  var HOLIDAYS={'__1-1':{name:'元旦',type:'holiday',color:'#ff6b6b'},'__3-8':{name:'妇女节',type:'international',color:'#ff9ff3'},'__3-12':{name:'植树节',type:'memorial',color:'#4ade80'},'__4-7':{name:'世界卫生日',type:'international',color:'#ffd700'},'__4-1':{name:'愚人节',type:'international',color:'#ffd700'},'__5-1':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'__5-4':{name:'青年节',type:'memorial',color:'#4a9eff'},'__6-1':{name:'儿童节',type:'international',color:'#ffd700'},'__7-1':{name:'建党节',type:'memorial',color:'#ff6b6b'},'__8-1':{name:'建军节',type:'memorial',color:'#ff6b6b'},'__9-10':{name:'教师节',type:'memorial',color:'#ffd700'},'__10-1':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'__10-2':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'__10-3':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'__4-22':{name:'地球日',type:'international',color:'#4ade80'},'__4-23':{name:'读书日',type:'international',color:'#4a9eff'},'__6-5':{name:'环境日',type:'international',color:'#4ade80'},'__12-25':{name:'圣诞节',type:'international',color:'#ff6b6b'},'__12-24':{name:'平安夜',type:'international',color:'#ff9ff3'},'2024-2-10':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-2-11':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-2-12':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-2-13':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-2-14':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-2-15':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-2-16':{name:'春节',type:'holiday',color:'#ff6b6b'},'2024-4-4':{name:'清明节',type:'holiday',color:'#4ade80'},'2024-4-5':{name:'清明节',type:'holiday',color:'#4ade80'},'2024-4-6':{name:'清明节',type:'holiday',color:'#4ade80'},'2024-5-1':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2024-5-2':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2024-5-3':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2024-5-4':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2024-5-5':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2024-6-8':{name:'端午节',type:'holiday',color:'#ffd700'},'2024-6-9':{name:'端午节',type:'holiday',color:'#ffd700'},'2024-6-10':{name:'端午节',type:'holiday',color:'#ffd700'},'2024-9-15':{name:'中秋节',type:'holiday',color:'#ffd700'},'2024-9-16':{name:'中秋节',type:'holiday',color:'#ffd700'},'2024-9-17':{name:'中秋节',type:'holiday',color:'#ffd700'},'2024-10-1':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2024-10-2':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2024-10-3':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2024-10-4':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2024-10-5':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2024-10-6':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2024-10-7':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-1-1':{name:'元旦',type:'holiday',color:'#ff6b6b'},'2025-1-28':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-1-29':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-1-30':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-1-31':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-2-1':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-2-2':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-2-3':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-2-4':{name:'春节',type:'holiday',color:'#ff6b6b'},'2025-4-4':{name:'清明节',type:'holiday',color:'#4ade80'},'2025-4-5':{name:'清明节',type:'holiday',color:'#4ade80'},'2025-4-6':{name:'清明节',type:'holiday',color:'#4ade80'},'2025-5-1':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2025-5-2':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2025-5-3':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2025-5-4':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2025-5-5':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2025-5-31':{name:'端午节',type:'holiday',color:'#ffd700'},'2025-6-1':{name:'端午节',type:'holiday',color:'#ffd700'},'2025-6-2':{name:'端午节',type:'holiday',color:'#ffd700'},'2025-10-1':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-10-2':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-10-3':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-10-4':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-10-5':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-10-6':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2025-10-7':{name:'中秋节',type:'holiday',color:'#ffd700'},'2025-10-8':{name:'中秋节',type:'holiday',color:'#ffd700'},'2026-1-1':{name:'元旦',type:'holiday',color:'#ff6b6b'},'2026-1-2':{name:'元旦',type:'holiday',color:'#ff6b6b'},'2026-1-3':{name:'元旦',type:'holiday',color:'#ff6b6b'},'2026-2-17':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-2-18':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-2-19':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-2-20':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-2-21':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-2-22':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-2-23':{name:'春节',type:'holiday',color:'#ff6b6b'},'2026-4-5':{name:'清明节',type:'holiday',color:'#4ade80'},'2026-4-6':{name:'清明节',type:'holiday',color:'#4ade80'},'2026-5-1':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2026-5-2':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2026-5-3':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2026-5-4':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2026-5-5':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2026-6-19':{name:'端午节',type:'holiday',color:'#ffd700'},'2026-6-20':{name:'端午节',type:'holiday',color:'#ffd700'},'2026-6-21':{name:'端午节',type:'holiday',color:'#ffd700'},'2026-9-25':{name:'中秋节',type:'holiday',color:'#ffd700'},'2026-9-26':{name:'中秋节',type:'holiday',color:'#ffd700'},'2026-9-27':{name:'中秋节',type:'holiday',color:'#ffd700'},'2026-10-1':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2026-10-2':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2026-10-3':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2026-10-4':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2026-10-5':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2026-10-6':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2026-10-7':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-1-1':{name:'元旦',type:'holiday',color:'#ff6b6b'},'2027-2-6':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-2-7':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-2-8':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-2-9':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-2-10':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-2-11':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-2-12':{name:'春节',type:'holiday',color:'#ff6b6b'},'2027-4-5':{name:'清明节',type:'holiday',color:'#4ade80'},'2027-4-6':{name:'清明节',type:'holiday',color:'#4ade80'},'2027-5-1':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2027-5-2':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2027-5-3':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2027-5-4':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2027-5-5':{name:'劳动节',type:'holiday',color:'#ff6b6b'},'2027-6-9':{name:'端午节',type:'holiday',color:'#ffd700'},'2027-6-10':{name:'端午节',type:'holiday',color:'#ffd700'},'2027-6-11':{name:'端午节',type:'holiday',color:'#ffd700'},'2027-10-1':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-10-2':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-10-3':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-10-4':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-10-5':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-10-6':{name:'国庆节',type:'holiday',color:'#ff6b6b'},'2027-10-7':{name:'国庆节',type:'holiday',color:'#ff6b6b'}};
+  function getHoliday(year,month,day){var specificKey=year+'-'+month+'-'+day;var genericKey='__'+month+'-'+day;return HOLIDAYS[specificKey]||HOLIDAYS[genericKey]||null}
+  global.HolidayDB={getHoliday:getHoliday};
+})(window);
+  </script>
+  <script src="xlsx.full.min.js"></script>
+  <script src="sql-wasm.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
