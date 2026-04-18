@@ -667,19 +667,112 @@ function checkForUpdates() {
     }
   } catch(e) {}
 
+  // 镜像源配置
+  const MIRROR_URLS = {
+    github: null,     // 使用默认 GitHub provider
+    ghproxy: 'https://mirror.ghproxy.com/',
+    ghfast: 'https://ghfast.top/'
+  };
+
+  /**
+   * 同步检测系统代理并设置环境变量
+   * 使用同步方式读取 Windows 系统注册表 / 环境变量中的代理设置，
+   * 避免 resolveProxy 异步竞态问题。
+   */
+  function setupSystemProxySync() {
+    try {
+      // 方式1：直接读环境变量（大部分代理软件会设置这些）
+      var envProxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
+                     process.env.HTTP_PROXY || process.env.http_proxy ||
+                     process.env.ALL_PROXY || process.env.all_proxy;
+      if (envProxy) {
+        logInfo('PROXY', '从环境变量检测到代理: ' + envProxy);
+        return envProxy;
+      }
+
+      // 方式2：尝试用同步方式获取（部分 Electron 版本支持）
+      try {
+        var { session } = require('electron');
+        var defaultSession = session.defaultSession;
+        if (defaultSession && defaultSession.resolveProxySync) {
+          var proxy = defaultSession.resolveProxySync('https://github.com');
+          if (proxy && proxy !== 'DIRECT' && !proxy.includes('DIRECT')) {
+            logInfo('PROXY', '同步检测到系统代理: ' + proxy);
+            var proxyUrl = proxy.trim();
+            if (!proxyUrl.startsWith('http')) {
+              proxyUrl = 'http://' + proxyUrl;
+            }
+            return proxyUrl;
+          }
+        }
+      } catch(syncErr) {
+        // resolveProxySync 不支持时静默跳过
+      }
+
+      logInfo('PROXY', '未检测到系统代理（直连模式）');
+      return null;
+    } catch(err) {
+      logError('PROXY', '代理检测异常（非致命）', err.message);
+      return null;
+    }
+  }
+
+  /** 设置代理环境变量 */
+  function applyProxyEnv(proxyUrl) {
+    if (proxyUrl) {
+      process.env.HTTP_PROXY = proxyUrl;
+      process.env.HTTPS_PROXY = proxyUrl;
+      process.env.http_proxy = proxyUrl;
+      process.env.https_proxy = proxyUrl;
+      logInfo('PROXY', '已注入代理环境变量');
+    }
+  }
+
+  /** 根据镜像源配置 autoUpdater 的 feed URL */
+  function configureFeed(source) {
+    var mirrorUrl = MIRROR_URLS[source];
+
+    if (mirrorUrl) {
+      // 镜像源：使用 generic provider
+      // electron-updater generic provider 需要 URL 指向包含 yml 文件的目录
+      // GitHub releases 格式: https://github.com/owner/repo/releases/download/
+      // 镜像格式: mirrorUrl + 原始GitHub URL
+      var baseUrl = 'https://github.com/wsccddyk/todo-list/releases/';
+      var feedUrl = mirrorUrl + baseUrl;
+
+      logInfo('UPDATE', '使用镜像源: ' + source + ', URL: ' + feedUrl);
+      autoUpdater.setFeedURL({
+        provider: 'generic',
+        url: feedUrl
+      });
+    } else {
+      // 官方 GitHub 源
+      logInfo('UPDATE', '使用 GitHub 官方源（需确保网络可达或已开TUN模式VPN）');
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'wsccddyk',
+        repo: 'todo-list'
+      });
+    }
+  }
+
   logInfo('UPDATE', '开始检查更新...');
 
   autoUpdater.autoDownload = false; // 先不自动下载，让用户确认
   autoUpdater.autoInstallOnAppQuit = true;
 
-  // 设置请求超时（毫秒）—— 30秒超时，配合渲染层25秒提示
+  // 设置请求头和超时
   autoUpdater.requestHeaders = {
     'User-Agent': 'TodoList-Updater/1.0',
     'Accept': 'application/json'
   };
 
-  // 检测并设置系统代理（解决VPN/代理软件不生效的问题）
-  setupSystemProxy();
+  // ====== 同步设置代理（解决竞态问题）======
+  var detectedProxy = setupSystemProxySync();
+  applyProxyEnv(detectedProxy);
+
+  // 默认使用 github 官方源（后续可通过 IPC 切换）
+  configureFeed('github');
 
   autoUpdater.on('checking-for-update', () => {
     logInfo('UPDATE', '正在检查新版本...');
@@ -722,17 +815,21 @@ function checkForUpdates() {
   autoUpdater.on('error', (err) => {
     var errMsg = err.message || String(err);
     logError('UPDATE', '更新检查失败', errMsg);
-    // 区分网络错误和其他错误，给用户更友好的提示
+    // 区分网络错误和其他错误
     if (errMsg.indexOf('ETIMEDOUT') !== -1 || errMsg.indexOf('ECONNREFUSED') !== -1 ||
-        errMsg.indexOf('ENOTFOUND') !== -1 || errMsg.indexOf('socket hang') !== -1 ||
-        errMsg.indexOf('net::') !== -1 || errMsg.indexOf('connect ') !== -1) {
-      errMsg = 'NETWORK_ERROR: 无法连接到 GitHub（网络问题或被墙）。注意：electron-updater 不走系统代理/VPN，需在系统代理设置中配置或开启 TUN 模式';
+        errMsg.indexOf('ENOTFOUND') !== -1 || errMsg.indexOf('socket hang up') !== -1 ||
+        errMsg.indexOf('net::ERR_') !== -1 || errMsg.indexOf('getaddrinfo') !== -1 ||
+        errMsg.indexOf('connect EHOSTUNREACH') !== -1 || errMsg.indexOf('Could not resolve') !== -1) {
+      errMsg = '网络无法连接到 GitHub。建议：1) 开启VPN的TUN模式(全局代理) 2) 或切换到国内镜像源(ghproxy)';
     }
     if (win) win.webContents.send('update-status', { state: 'error', message: errMsg });
   });
 
   // IPC：渲染进程请求手动检查/下载/安装
   ipcMain.handle('updater-check', async () => {
+    // 手动检查前重新检测代理
+    var p = setupSystemProxySync();
+    applyProxyEnv(p);
     return autoUpdater.checkForUpdates();
   });
   ipcMain.handle('updater-download', async () => {
@@ -748,71 +845,16 @@ function checkForUpdates() {
   });
 
   // IPC：设置更新源（镜像支持）
-  const MIRROR_URLS = {
-    github: null, // 使用默认配置
-    ghproxy: 'https://mirror.ghproxy.com/',
-    ghfast: 'https://ghfast.top/'
-  };
-  
-  /**
-   * 检测系统代理并设置环境变量（解决VPN不生效的问题）
-   * electron-updater 内部使用 Node.js 的 http/https 模块，
-   * 这些模块默认不走系统代理。需要通过环境变量或 global-agent 来实现。
-   */
-  function setupSystemProxy() {
-    try {
-      var { session } = require('electron');
-      var defaultSession = session.defaultSession;
-      if (defaultSession) {
-        defaultSession.resolveProxy('https://github.com').then(function(proxy) {
-          if (proxy && proxy !== 'DIRECT' && !proxy.includes('DIRECT')) {
-            logInfo('PROXY', '检测到系统代理: ' + proxy);
-            // 将代理地址转换为环境变量格式
-            var proxyUrl = proxy.trim();
-            if (!proxyUrl.startsWith('http')) {
-              proxyUrl = 'http://' + proxyUrl;
-            }
-            process.env.HTTP_PROXY = proxyUrl;
-            process.env.HTTPS_PROXY = proxyUrl;
-            process.env.http_proxy = proxyUrl;
-            process.env.https_proxy = proxyUrl;
-            logInfo('PROXY', '已设置代理环境变量，更新请求将走代理');
-          } else {
-            logInfo('PROXY', '未检测到系统代理（或为直连模式）');
-          }
-        }).catch(function(err) {
-          logWarn('PROXY', '检测代理失败: ' + err.message);
-        });
-      }
-    } catch(proxyErr) {
-      logError('PROXY', '代理设置异常（非致命）', proxyErr.message);
-    }
-  }
-
   ipcMain.handle('set-updater-source', async (event, source) => {
-    var mirrorUrl = MIRROR_URLS[source];
-    
-    // 每次切换更新源前都尝试设置代理
-    setupSystemProxy();
-    
-    if (mirrorUrl) {
-      logInfo('UPDATE', '切换更新源到: ' + source + ' (' + mirrorUrl + ')');
-      autoUpdater.setFeedURL({
-        provider: 'generic',
-        url: mirrorUrl + 'https://github.com/wsccddyk/todo-list/releases/latest'
-      });
-    } else {
-      logInfo('UPDATE', '使用 GitHub 官方源（需代理/VPN）');
-      // 恢复默认 GitHub 配置
-      autoUpdater.setFeedURL({
-        provider: 'github',
-        owner: 'wsccddyk',
-        repo: 'todo-list'
-      });
-    }
+    // 切换源时重新检测代理
+    var p = setupSystemProxySync();
+    applyProxyEnv(p);
+
+    configureFeed(source);
     return { success: true, source: source };
   });
 
+  // 启动首次自动检查
   autoUpdater.checkForUpdates()
     .catch(err => logError('UPDATE', 'checkForUpdates异常', err.message));
 }
