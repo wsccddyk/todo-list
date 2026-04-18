@@ -1,6 +1,6 @@
 {
   "name": "calendar-list",
-  "version": "9.8.1",
+  "version": "9.8.2",
   "description": "桌面日历与任务管理工具",
   "author": "CalendarApp",
   "main": "main.js",

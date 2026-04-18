@@ -597,12 +597,20 @@ function createWindow() {
   // 开机自启动
   ipcMain.handle('set-auto-start', async (event, enabled) => {
     try {
+      // process.execPath 在打包后可能指向临时目录，需要用 app.getPath('exe')
+      var exePath = app.isPackaged ? process.execPath : app.getPath('exe');
+      logInfo('AUTO_START', 'exe路径: ' + exePath);
+      logInfo('AUTO_START', 'isPackaged: ' + app.isPackaged);
       app.setLoginItemSettings({
         openAtLogin: !!enabled,
-        path: process.execPath
+        path: exePath,
+        args: []
       });
+      // 验证是否设置成功
+      var loginSettings = app.getLoginItemSettings();
       logInfo('AUTO_START', enabled ? '已启用开机自启动' : '已关闭开机自启动');
-      return { success: true };
+      logInfo('AUTO_START', '验证 - openAtLogin: ' + loginSettings.openAtLogin + ', executableWillLaunchAtLogin: ' + loginSettings.executableWillLaunchAtLogin);
+      return { success: true, verified: loginSettings.openAtLogin === !!enabled };
     } catch(e) {
       logError('AUTO_START', '设置开机自启动失败: ' + e.message);
       return { success: false, error: e.message };
@@ -670,19 +678,8 @@ function checkForUpdates() {
     'Accept': 'application/json'
   };
 
-  // 尝试使用系统代理设置（解决VPN不生效的问题）
-  // Electron 的 net 模块默认不走系统代理，需要显式启用
-  try {
-    const { session } = require('electron');
-    const defaultSession = session.defaultSession;
-    if (defaultSession) {
-      defaultSession.allowRequestsForAnyOrigin(true);
-      defaultSession.setProxy({ mode: 'system' });
-      logInfo('UPDATE', '已启用系统代理模式（支持VPN/代理软件）');
-    }
-  } catch(proxyErr) {
-    logError('UPDATE', '系统代理设置失败（非致命，继续检查）', proxyErr.message);
-  }
+  // 检测并设置系统代理（解决VPN/代理软件不生效的问题）
+  setupSystemProxy();
 
   autoUpdater.on('checking-for-update', () => {
     logInfo('UPDATE', '正在检查新版本...');
@@ -745,14 +742,59 @@ function checkForUpdates() {
     autoUpdater.quitAndInstall(true, true);
   });
 
+  // IPC：获取应用版本号
+  ipcMain.handle('get-app-version', async () => {
+    return { version: app.getVersion() };
+  });
+
   // IPC：设置更新源（镜像支持）
   const MIRROR_URLS = {
     github: null, // 使用默认配置
     ghproxy: 'https://mirror.ghproxy.com/',
     ghfast: 'https://ghfast.top/'
   };
+  
+  /**
+   * 检测系统代理并设置环境变量（解决VPN不生效的问题）
+   * electron-updater 内部使用 Node.js 的 http/https 模块，
+   * 这些模块默认不走系统代理。需要通过环境变量或 global-agent 来实现。
+   */
+  function setupSystemProxy() {
+    try {
+      var { session } = require('electron');
+      var defaultSession = session.defaultSession;
+      if (defaultSession) {
+        defaultSession.resolveProxy('https://github.com').then(function(proxy) {
+          if (proxy && proxy !== 'DIRECT' && !proxy.includes('DIRECT')) {
+            logInfo('PROXY', '检测到系统代理: ' + proxy);
+            // 将代理地址转换为环境变量格式
+            var proxyUrl = proxy.trim();
+            if (!proxyUrl.startsWith('http')) {
+              proxyUrl = 'http://' + proxyUrl;
+            }
+            process.env.HTTP_PROXY = proxyUrl;
+            process.env.HTTPS_PROXY = proxyUrl;
+            process.env.http_proxy = proxyUrl;
+            process.env.https_proxy = proxyUrl;
+            logInfo('PROXY', '已设置代理环境变量，更新请求将走代理');
+          } else {
+            logInfo('PROXY', '未检测到系统代理（或为直连模式）');
+          }
+        }).catch(function(err) {
+          logWarn('PROXY', '检测代理失败: ' + err.message);
+        });
+      }
+    } catch(proxyErr) {
+      logError('PROXY', '代理设置异常（非致命）', proxyErr.message);
+    }
+  }
+
   ipcMain.handle('set-updater-source', async (event, source) => {
     var mirrorUrl = MIRROR_URLS[source];
+    
+    // 每次切换更新源前都尝试设置代理
+    setupSystemProxy();
+    
     if (mirrorUrl) {
       logInfo('UPDATE', '切换更新源到: ' + source + ' (' + mirrorUrl + ')');
       autoUpdater.setFeedURL({
@@ -760,12 +802,12 @@ function checkForUpdates() {
         url: mirrorUrl + 'https://github.com/wsccddyk/todo-list/releases/latest'
       });
     } else {
-      logInfo('UPDATE', '使用 GitHub 官方源');
-      // 恢复默认（从 package.json 的 publish 配置读取）
+      logInfo('UPDATE', '使用 GitHub 官方源（需代理/VPN）');
+      // 恢复默认 GitHub 配置
       autoUpdater.setFeedURL({
         provider: 'github',
-        owner: 'baogan',
-        repo: 'calendar-list'
+        owner: 'wsccddyk',
+        repo: 'todo-list'
       });
     }
     return { success: true, source: source };
