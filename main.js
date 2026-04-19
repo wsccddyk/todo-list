@@ -2,10 +2,19 @@
  * 日历清单 - Electron 主进程
  * 无边框窗口，支持桌面挂件模式
  */
-const { app, BrowserWindow, ipcMain, screen, clipboard, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, clipboard, Tray, Menu, dialog, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
+
+// ====== 开发模式调试：强制 isPackaged 让 electron-updater 正常工作 ======
+// 生产环境打包后这段代码无效，因为 app.isPackaged 本身就是 true
+if (!app.isPackaged) {
+  Object.defineProperty(app, 'isPackaged', {
+    get: function() { return true; }
+  });
+  console.log('[开发调试] 已强制设置 app.isPackaged = true，允许 electron-updater 在开发模式运行');
+}
 
 // 日志配置
 const LOG_DIR = path.join(app.getPath('userData'), 'logs');
@@ -78,6 +87,7 @@ const settingsFile = path.join(userDataPath, 'calendar-settings.json');
 const dayColorsFile = path.join(userDataPath, 'calendar-day-colors.json');
 const windowStateFile = path.join(userDataPath, 'window-state.json');
 const desktopModeFile = path.join(userDataPath, 'desktop-mode.json');
+const cloudSyncConfigFile = path.join(userDataPath, 'cloud-sync-config.json');
 
 // ============ 数据存储 ============
 let tasksData = {};
@@ -657,6 +667,252 @@ app.whenReady().then(() => {
 // ==========================================
 //   自动更新（electron-updater + GitHub Release）
 // ==========================================
+
+/**
+ * 云同步/代理配置文件管理
+ */
+function getCloudSyncConfig() {
+  try {
+    if (fs.existsSync(cloudSyncConfigFile)) {
+      return JSON.parse(fs.readFileSync(cloudSyncConfigFile, 'utf8'));
+    }
+  } catch(e) {}
+  return {};
+}
+
+function saveCloudSyncConfig(config) {
+  try {
+    fs.writeFileSync(cloudSyncConfigFile, JSON.stringify(config, null, 2), 'utf8');
+  } catch(e) {}
+}
+
+/**
+ * 【v9.8.6 核心修复】智能代理检测策略
+ * 
+ * 新策略（按优先级）：
+ *   1. 用户手动设置的代理地址（最可靠）
+ *   2. Windows 系统代理（mode:'system' — Clash/VPN 大多会设这个）
+ *   3. 环境变量（部分代理软件会设）
+ *   4. 常见端口扫描（手动检查时才启用，探测 7890/10809 等常见端口）
+ */
+/**
+ * 通过 Windows 注册表读取系统代理设置（IE/代理软件都会写这里）
+ * 返回 proxy server 字符串或 null
+ */
+function getWindowsSystemProxy() {
+  try {
+    var execSync = require('child_process').execSync;
+    // 读取 Windows IE 代理设置
+    var result = execSync(
+      'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer',
+      { encoding: 'utf8', timeout: 3000 }
+    );
+    // 输出格式: ProxyServer    REG_SZ    127.0.0.1:7890
+    var match = result.match(/ProxyServer\s+REG_SZ\s+(.+)/);
+    if (match) {
+      var proxyStr = match[1].trim();
+      if (proxyStr && proxyStr.length > 0) {
+        logInfo('PROXY', '[注册表] 发现系统代理: ' + proxyStr);
+        return proxyStr;
+      }
+    }
+    return null;
+  } catch(e) {
+    logInfo('PROXY', '[注册表] 无法读取（可能无代理或权限不足）');
+    return null;
+  }
+}
+
+/**
+ * 检查注册表中 ProxyEnable 是否为 1（代理是否启用）
+ */
+function isWindowsProxyEnabled() {
+  try {
+    var execSync = require('child_process').execSync;
+    var result = execSync(
+      'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable',
+      { encoding: 'utf8', timeout: 3000 }
+    );
+    var match = result.match(/ProxyEnable\s+REG_DWORD\s+0x(\d+)/);
+    if (match) return match[1] === '1';
+    return false;
+  } catch(e) {
+    return false;
+  }
+}
+
+/**
+ * 获取当前可用的代理 URL（供 IP 检测等需要走代理的请求使用）
+ * 返回格式: 'http://host:port' 或 null（无代理时直连）
+ */
+function getProxyUrl() {
+  // 优先级1: 用户手动配置
+  var config = getCloudSyncConfig();
+  if (config.manualProxy && config.manualProxy.trim()) {
+    return normalizeProxyUrl(config.manualProxy);
+  }
+  
+  // 优先级2: 系统注册表代理
+  var sysProxy = getWindowsSystemProxy();
+  var proxyEnabled = isWindowsProxyEnabled();
+  if (sysProxy && proxyEnabled) {
+    return normalizeProxyUrl(sysProxy);
+  }
+  
+  // 优先级3: 环境变量
+  var envProxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
+                 process.env.HTTP_PROXY || process.env.http_proxy ||
+                 process.env.ALL_PROXY || process.env.all_proxy;
+  if (envProxy) {
+    return normalizeProxyUrl(envProxy);
+  }
+  
+  return null; // 无代理，直连
+}
+
+function detectAndApplyProxy(forceProbe) {
+  forceProbe = !!forceProbe;
+  var config = getCloudSyncConfig();
+  var sess = session.defaultSession;
+  if (!sess) return Promise.resolve('no-session');
+
+  // ====== 优先级1：用户手动配置的代理 ======
+  if (config.manualProxy && config.manualProxy.trim()) {
+    var manualUrl = normalizeProxyUrl(config.manualProxy);
+    logInfo('PROXY', '[P1-手动] 使用用户配置的代理: ' + manualUrl);
+    return sess.setProxy({
+      mode: 'fixed_servers',
+      proxyRules: extractHostAndPort(manualUrl)
+    }).then(function() {
+      logInfo('PROXY', '[生效] 手动代理已设置');
+      return 'manual';
+    });
+  }
+
+  // ====== 优先级2：Windows注册表/系统代理 ======
+  // 用 reg 命令直接读 IE 代理设置，不依赖 resolveProxySync
+  var registryProxy = getWindowsSystemProxy();
+  var proxyEnabled = isWindowsProxyEnabled();
+
+  if (registryProxy && proxyEnabled) {
+    // 注册表有代理地址且已启用 → 直接用 fixed_servers 模式设置
+    var sysProxyUrl = normalizeProxyUrl(registryProxy);
+    logInfo('PROXY', '[P2-注册表] 使用系统注册表代理: ' + sysProxyUrl);
+    return sess.setProxy({
+      mode: 'fixed_servers',
+      proxyRules: extractHostAndPort(sysProxyUrl)
+    }).then(function() {
+      logInfo('PROXY', '[生效] 注册表代理已设置');
+      return 'registry';
+    });
+  }
+
+  logInfo('PROXY', '[P2-system] 未从注册表检测到代理，尝试 system 模式...');
+
+  // 注册表没找到 → 尝试 system 模式（让 Electron 自己处理）
+  // 不再用 resolveProxySync 验证（当前 Electron 版本不支持）
+  return sess.setProxy({ mode: 'system' }).then(function() {
+    return new Promise(function(resolve) {
+      setTimeout(function() {
+        // ====== 优先级3：环境变量 ======
+        var envProxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
+                       process.env.HTTP_PROXY || process.env.http_proxy ||
+                       process.env.ALL_PROXY || process.env.all_proxy;
+
+        if (envProxy) {
+          var envUrl = normalizeProxyUrl(envProxy);
+          logInfo('PROXY', '[P3-环境变量] 检测到: ' + envUrl);
+          return sess.setProxy({
+            mode: 'fixed_servers',
+            proxyRules: extractHostAndPort(envUrl)
+          }).then(function() {
+            logInfo('PROXY', '[生效] 环境变量代理已设置');
+            resolve('env');
+          });
+        }
+
+        // ====== 优先级4：常见端口探测（仅手动检查时）======
+        if (forceProbe) {
+          logInfo('PROXY', '[P4-探测] 扫描本地常见代理端口...');
+          return probeCommonPorts(sess).then(function(found) {
+            if (found) {
+              resolve('probed');
+            } else {
+              logInfo('PROXY', '[最终] 未检测到任何代理，使用直连模式');
+              return sess.setProxy({ mode: 'direct' }).then(function() { resolve('direct'); });
+            }
+          });
+        }
+
+        logInfo('PROXY', '[最终] 未检测到任何代理，使用直连模式');
+        return sess.setProxy({ mode: 'direct' }).then(function() { resolve('direct'); });
+      }, 300);
+    });
+  });
+}
+
+/** 探测本地常见代理端口（串行扫描，找到一个即停） */
+function probeCommonPorts(sess) {
+  var ports = [7890, 10809, 10808, 1080, 8080, 7891, 2080];
+  var net = require('net');
+
+  function tryConnect(host, port) {
+    return new Promise(function(resolve) {
+      var socket = new net.Socket();
+      var timer = setTimeout(function() {
+        try { socket.destroy(); } catch(ex) {}
+        resolve(false);
+      }, 800);
+      socket.connect(port, host, function() {
+        clearTimeout(timer);
+        try { socket.destroy(); } catch(ex) {}
+        resolve(true);
+      });
+      socket.on('error', function() {
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
+  }
+
+  return ports.reduce(function(chain, port) {
+    return chain.then(function(found) {
+      if (found) return true;
+      logInfo('PROXY', '[探测] 尝试 127.0.0.1:' + port);
+      return tryConnect('127.0.0.1', port).then(function(ok) {
+        if (ok) {
+          var addr = 'http://127.0.0.1:' + port;
+          logInfo('PROXY', '[探测成功! ] 发现可用代理: ' + addr);
+          return sess.setProxy({
+            mode: 'fixed_servers',
+            proxyRules: '127.0.0.1:' + port
+          }).then(function() { return true; });
+        }
+        return false;
+      });
+    });
+  }, Promise.resolve(false));
+}
+
+/** 标准化代理URL格式 */
+function normalizeProxyUrl(url) {
+  url = String(url).trim();
+  if (!/^https?:\/\//i.test(url)) {
+    url = 'http://' + url;
+  }
+  return url.replace(/\/$/, '');
+}
+
+/** 从完整代理URL中提取 host:port 格式 */
+function extractHostAndPort(proxyUrl) {
+  try {
+    var u = new URL(proxyUrl);
+    return u.hostname + ':' + (u.port || (u.protocol === 'https:' ? '443' : '7890'));
+  } catch(e) {
+    return proxyUrl;
+  }
+}
+
 function checkForUpdates() {
   // 如果用户关闭了自动检测，跳过
   try {
@@ -667,87 +923,35 @@ function checkForUpdates() {
     }
   } catch(e) {}
 
-  // 镜像源配置
-  const MIRROR_URLS = {
-    github: null,     // 使用默认 GitHub provider
-    ghproxy: 'https://mirror.ghproxy.com/',
-    ghfast: 'https://ghfast.top/'
+  // 更新源配置
+  // gitee：国内直连，无需代理；github：需代理访问（保留作为备选）
+  const UPDATE_SOURCES = {
+    gitee: {
+      // generic provider，指向 Gitee 仓库中存储的 latest.yml 文件
+      // 构建时需要将 latest.yml 上传到 Gitee 仓库根目录
+      getFeedUrl: function() {
+        return 'https://gitee.com/yansusu999/todo-list/raw/master/latest.yml';
+      },
+      apiUrl: 'https://gitee.com/api/v5/repos/yansusu999/todo-list/releases/latest'
+    },
+    github: null  // 备选，保持原有逻辑兼容
   };
 
-  /**
-   * 同步检测系统代理并设置环境变量
-   * 使用同步方式读取 Windows 系统注册表 / 环境变量中的代理设置，
-   * 避免 resolveProxy 异步竞态问题。
-   */
-  function setupSystemProxySync() {
-    try {
-      // 方式1：直接读环境变量（大部分代理软件会设置这些）
-      var envProxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
-                     process.env.HTTP_PROXY || process.env.http_proxy ||
-                     process.env.ALL_PROXY || process.env.all_proxy;
-      if (envProxy) {
-        logInfo('PROXY', '从环境变量检测到代理: ' + envProxy);
-        return envProxy;
-      }
-
-      // 方式2：尝试用同步方式获取（部分 Electron 版本支持）
-      try {
-        var { session } = require('electron');
-        var defaultSession = session.defaultSession;
-        if (defaultSession && defaultSession.resolveProxySync) {
-          var proxy = defaultSession.resolveProxySync('https://github.com');
-          if (proxy && proxy !== 'DIRECT' && !proxy.includes('DIRECT')) {
-            logInfo('PROXY', '同步检测到系统代理: ' + proxy);
-            var proxyUrl = proxy.trim();
-            if (!proxyUrl.startsWith('http')) {
-              proxyUrl = 'http://' + proxyUrl;
-            }
-            return proxyUrl;
-          }
-        }
-      } catch(syncErr) {
-        // resolveProxySync 不支持时静默跳过
-      }
-
-      logInfo('PROXY', '未检测到系统代理（直连模式）');
-      return null;
-    } catch(err) {
-      logError('PROXY', '代理检测异常（非致命）', err.message);
-      return null;
-    }
-  }
-
-  /** 设置代理环境变量 */
-  function applyProxyEnv(proxyUrl) {
-    if (proxyUrl) {
-      process.env.HTTP_PROXY = proxyUrl;
-      process.env.HTTPS_PROXY = proxyUrl;
-      process.env.http_proxy = proxyUrl;
-      process.env.https_proxy = proxyUrl;
-      logInfo('PROXY', '已注入代理环境变量');
-    }
-  }
-
-  /** 根据镜像源配置 autoUpdater 的 feed URL */
+  /** 根据更新源配置 autoUpdater 的 feed URL */
   function configureFeed(source) {
-    var mirrorUrl = MIRROR_URLS[source];
-
-    if (mirrorUrl) {
-      // 镜像源：使用 generic provider
-      // electron-updater generic provider 需要 URL 指向包含 yml 文件的目录
-      // GitHub releases 格式: https://github.com/owner/repo/releases/download/
-      // 镜像格式: mirrorUrl + 原始GitHub URL
-      var baseUrl = 'https://github.com/wsccddyk/todo-list/releases/';
-      var feedUrl = mirrorUrl + baseUrl;
-
-      logInfo('UPDATE', '使用镜像源: ' + source + ', URL: ' + feedUrl);
+    if (source === 'gitee' && UPDATE_SOURCES.gitee) {
+      var feedUrl = UPDATE_SOURCES.gitee.getFeedUrl();
+      logInfo('UPDATE', '使用 Gitee 更新源, URL: ' + feedUrl);
       autoUpdater.setFeedURL({
         provider: 'generic',
-        url: feedUrl
+        url: feedUrl,
+        requestHeaders: {
+          'User-Agent': 'TodoList-Updater/1.0'
+        }
       });
     } else {
-      // 官方 GitHub 源
-      logInfo('UPDATE', '使用 GitHub 官方源（需确保网络可达或已开TUN模式VPN）');
+      // github 兼容模式（备用）
+      logInfo('UPDATE', '使用 GitHub 官方源');
       autoUpdater.setFeedURL({
         provider: 'github',
         owner: 'wsccddyk',
@@ -756,23 +960,23 @@ function checkForUpdates() {
     }
   }
 
-  logInfo('UPDATE', '开始检查更新...');
+  logInfo('UPDATE', '开始初始化自动更新...');
 
-  autoUpdater.autoDownload = false; // 先不自动下载，让用户确认
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.forceDevUpdate = true; // 强制在开发模式也检查更新（开发调试用）
 
-  // 设置请求头和超时
   autoUpdater.requestHeaders = {
     'User-Agent': 'TodoList-Updater/1.0',
     'Accept': 'application/json'
   };
 
-  // ====== 同步设置代理（解决竞态问题）======
-  var detectedProxy = setupSystemProxySync();
-  applyProxyEnv(detectedProxy);
+  // ====== 智能代理检测并应用 ======
+  detectAndApplyProxy(false).then(function(mode) {
+    logInfo('PROXY', '[初始化完成] 代理模式: ' + mode);
+  });
 
-  // 默认使用 github 官方源（后续可通过 IPC 切换）
-  configureFeed('github');
+  configureFeed('gitee');
 
   autoUpdater.on('checking-for-update', () => {
     logInfo('UPDATE', '正在检查新版本...');
@@ -791,9 +995,12 @@ function checkForUpdates() {
     }
   });
 
-  autoUpdater.on('update-not-available', () => {
+  autoUpdater.on('update-not-available', (info) => {
     logInfo('UPDATE', '当前已是最新版本');
-    if (win) win.webContents.send('update-status', { state: 'not-available' });
+    if (win) win.webContents.send('update-status', {
+      state: 'not-available',
+      version: info ? info.version : null
+    });
   });
 
   autoUpdater.on('download-progress', (progress) => {
@@ -812,51 +1019,1062 @@ function checkForUpdates() {
     }
   });
 
-  autoUpdater.on('error', (err) => {
-    var errMsg = err.message || String(err);
-    logError('UPDATE', '更新检查失败', errMsg);
-    // 区分网络错误和其他错误
-    if (errMsg.indexOf('ETIMEDOUT') !== -1 || errMsg.indexOf('ECONNREFUSED') !== -1 ||
-        errMsg.indexOf('ENOTFOUND') !== -1 || errMsg.indexOf('socket hang up') !== -1 ||
-        errMsg.indexOf('net::ERR_') !== -1 || errMsg.indexOf('getaddrinfo') !== -1 ||
-        errMsg.indexOf('connect EHOSTUNREACH') !== -1 || errMsg.indexOf('Could not resolve') !== -1) {
-      errMsg = '网络无法连接到 GitHub。建议：1) 开启VPN的TUN模式(全局代理) 2) 或切换到国内镜像源(ghproxy)';
+  /**
+   * 将 Electron/网络错误码翻译为中文用户友好提示
+   */
+  function translateNetError(rawMsg) {
+    var msg = String(rawMsg || '');
+
+    // 403/404 等服务端拒绝访问 → 当作"找不到更新"处理（不暴露仓库私有等细节）
+    if (/403|404|forbidden|not found|Not Found|拒绝访问|访问被拒绝/i.test(msg)) {
+      return '暂时没有找到更新的版本';
     }
+
+    // 超时类
+    if (/ETIMEDOUT|TIMEDOUT|timeout|超时/i.test(msg)) {
+      return '网络连接超时。\n\n服务器响应时间过长，可能原因：\n• 网络不稳定或带宽不足\n• 服务器暂时繁忙\n\n请稍后重试。';
+    }
+    // 连接被拒/被重置
+    if (/ECONNREFUSED|CONNREFUSED|connection refused|连接被拒绝/i.test(msg)) {
+      return '连接被拒绝。\n\n目标服务器拒绝连接，可能原因：\n• 防火墙拦截了请求\n• 服务器暂时不可用\n\n请稍后重试。';
+    }
+    if (/ECONNRESET|CONNECTION_RESET|connection reset|连接被重置/i.test(msg)) {
+      return '连接被中断。\n\n网络连接在传输过程中被强制关闭。\n\n建议稍后重新尝试。';
+    }
+    // DNS 解析失败
+    if (/ENOTFOUND|NOT_FOUND|getaddrinfo|Could not resolve|DNS|找不到主机/i.test(msg)) {
+      return 'DNS 解析失败。\n\n无法解析域名，可能原因：\n• 网络连接断开\n• DNS 设置异常\n\n请检查网络连接后重试。';
+    }
+    // 所有 net::ERR_* 错误
+    if (/net::ERR_/i.test(msg)) {
+      var errCode = (msg.match(/net::(ERR_\S*)/i) || [])[1] || 'UNKNOWN';
+      return '网络错误（' + errCode + '）\n\n访问更新服务器时发生网络异常。\n\n请检查网络后重试。';
+    }
+    // socket 错误
+    if (/socket hang|EPIPE|broken pipe/i.test(msg)) {
+      return '网络连接意外断开。\n\n请检查网络稳定性后重试。';
+    }
+    // 主机不可达
+    if (/EHOSTUNREACH|HOST_UNREACH|unreachable/i.test(msg)) {
+      return '目标主机不可达。\n\n当前网络环境无法到达服务器。\n\n请检查网络连接。';
+    }
+
+    // 未匹配到的原始消息（返回原文）
+    return msg;
+  }
+
+  autoUpdater.on('error', (err) => {
+    var errMsg = err ? (err.message || String(err)) : 'Unknown error';
+    logError('UPDATE', '更新检查失败', errMsg);
+
+    // 统一翻译为中文友好提示
+    errMsg = translateNetError(errMsg);
+
     if (win) win.webContents.send('update-status', { state: 'error', message: errMsg });
   });
 
-  // IPC：渲染进程请求手动检查/下载/安装
-  ipcMain.handle('updater-check', async () => {
-    // 手动检查前重新检测代理
-    var p = setupSystemProxySync();
-    applyProxyEnv(p);
-    return autoUpdater.checkForUpdates();
+  /**
+   * 带超时的安全包装器
+   * 注意：electron-updater 的 checkForUpdates 在网络不通时可能永远不 resolve/reject
+   * 所以必须用超时兜底
+   */
+  function checkWithTimeout(timeoutMs) {
+    timeoutMs = timeoutMs || 20000;
+
+    return new Promise(function(resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function() {
+        if (!settled) {
+          settled = true;
+          logError('UPDATE', '检查更新超时（' + (timeoutMs / 1000) + 's）');
+          reject(new Error('TIMEOUT'));
+        }
+      }, timeoutMs);
+
+      autoUpdater.checkForUpdates().then(function(result) {
+        if (!settled) { settled = true; clearTimeout(timer); resolve(result); }
+      }).catch(function(err) {
+        if (!settled) { settled = true; clearTimeout(timer); reject(err); }
+      });
+    });
+  }
+
+  /**
+   * 检测公网 IP 和归属地（通过代理）
+   * 注意：必须使用 Electron 的 net 模块或带代理的请求，否则不走系统代理/VPN
+   * 方案：先获取当前代理配置，然后通过代理发请求；无代理则直连
+   */
+  ipcMain.handle('get-public-ip', async () => {
+    var https = require('https');
+    var http = require('http');
+    var { URL } = require('url');
+
+    // 整个 handler 包一层 try-catch，防止 reply was never sent
+    try {
+      // 获取当前代理配置
+      var proxyUrl = getProxyUrl();
+      
+    function fetchIP(apiUrl, parseFn) {
+      return new Promise(function(resolve, reject) {
+        if (proxyUrl) {
+          fetchViaProxy(apiUrl, proxyUrl).then(function(data) {
+            logInfo('NET', '[DEBUG] ' + apiUrl + ' via proxy 返回(前100字符):', String(data).substring(0, 100));
+            resolve(parseFn(data));
+          }).catch(reject);
+        } else {
+          fetchDirect(apiUrl).then(function(rawData) {
+            logInfo('NET', '[DEBUG] ' + apiUrl + ' 直连返回(前100字符):', String(rawData).substring(0, 100));
+            resolve(parseFn(rawData));
+          }).catch(reject);
+        }
+      });
+    }
+
+      /**
+       * 通过代理发起 HTTP 请求
+       */
+      function fetchViaProxy(targetUrl, proxyAddr) {
+      return new Promise(function(resolve, reject) {
+        try {
+          var target = new URL(targetUrl);
+          var proxy = new URL(proxyAddr);
+          
+          var options = {
+            host: proxy.hostname,
+            port: parseInt(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80),
+            method: 'GET',
+            path: targetUrl,
+            headers: {
+              'User-Agent': 'TodoList/1.0',
+              'Host': target.host
+            },
+            timeout: 8000
+          };
+          
+          var mod = (proxy.protocol === 'https:' ? https : http);
+          var req = mod.request(options, function(res) {
+            var data = '';
+            res.on('data', function(chunk) { data += chunk; });
+            res.on('end', function() { resolve(data); });
+          });
+          req.on('error', reject);
+          req.on('timeout', function() { req.destroy(); reject(new Error('timeout')); });
+          req.end();
+        } catch(e) {
+          reject(e);
+        }
+      });
+    }
+
+    /**
+     * 直连请求（返回原始字符串）
+     */
+    function fetchDirect(apiUrl) {
+      return new Promise(function(resolve, reject) {
+        var isHttps = apiUrl.startsWith('https');
+        var mod = isHttps ? https : http;
+        
+        var req = mod.get(apiUrl, {
+          headers: { 'User-Agent': 'TodoList/1.0' },
+          timeout: 8000
+        }, function(res) {
+          var data = '';
+          res.on('data', function(chunk) { data += chunk; });
+          res.on('end', function() { resolve(data); });
+        });
+        req.on('error', reject);
+        req.on('timeout', function() { req.destroy(); reject(new Error('timeout')); });
+      });
+    }
+
+    /**
+     * 检测到指定服务器的连接延迟（ms）
+     * 超过 2000ms 显示 "2000ms+"，超时显示"超时"
+     * @param {string} targetUrl - 目标URL
+     * @param {number} timeoutMs - 超时毫秒数（默认 3000ms）
+     */
+    function measureLatency(targetUrl, timeoutMs) {
+      timeoutMs = timeoutMs || 3000;
+      return new Promise(function(resolve) {
+        var start = Date.now();
+        
+        if (proxyUrl) {
+          // 有代理：通过代理检测延迟
+          try {
+            var target = new URL(targetUrl);
+            var proxy = new URL(proxyUrl);
+            
+            var options = {
+              host: proxy.hostname,
+              port: parseInt(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80),
+              method: 'GET',
+              path: targetUrl,
+              headers: { 'User-Agent': 'TodoList/1.0', 'Host': target.host },
+              timeout: timeoutMs
+            };
+            
+            var pmod = (proxy.protocol === 'https:' ? https : http);
+            var req = pmod.request(options, function(res) {
+              var latency = Date.now() - start;
+              res.resume();
+              resolve({ latency: latency > 2000 ? 2001 : latency, ok: true });
+            });
+            req.on('error', function() { resolve({ latency: -1, ok: false }); });
+            req.on('timeout', function() { req.destroy(); resolve({ latency: -1, ok: false }); });
+            req.end();
+          } catch(e) {
+            resolve({ latency: -1, ok: false });
+          }
+        } else {
+          // 无代理：直连
+          var isHttps = targetUrl.startsWith('https');
+          var dmod = isHttps ? https : http;
+          
+          var dreq = dmod.get(targetUrl, {
+            headers: { 'User-Agent': 'TodoList/1.0' },
+            timeout: timeoutMs
+          }, function(res) {
+            var latency = Date.now() - start;
+            res.resume();
+            resolve({ latency: latency > 2000 ? 2001 : latency, ok: true });
+          });
+          dreq.on('error', function() { resolve({ latency: -1, ok: false }); });
+          dreq.on('timeout', function() { dreq.destroy(); resolve({ latency: -1, ok: false }); });
+        }
+      });
+    }
+
+    // ===== 并行检测 IP + 延迟（3秒超时） =====
+    
+    // 检测 Gitee 和 GitHub 的延迟（并行，各 3s 超时）
+    var giteeLatencyPromise = measureLatency('https://gitee.com/api/v5/repos/yansusu999/todo-list', 3000);
+    var githubLatencyPromise = measureLatency('https://api.github.com/repos/yansusu999/todo-list/releases/latest', 3000);
+
+    // ===== IP 检测（按可靠性排序：国内友好优先） =====
+    
+    logInfo('NET', '开始检测公网 IP，代理配置:', proxyUrl || '(无代理/直连)');
+
+    // API1: ip-api.com (HTTP) — 国内首选，速度快
+    try {
+      var info = await fetchIP('http://ip-api.com/json?lang=zh-CN', function(data) { return JSON.parse(data); });
+      logInfo('NET', '[DEBUG] ip-api.com 原始返回:', JSON.stringify(info));
+      if (info && info.status === 'success') {
+        logInfo('NET', 'IP检测成功(ip-api): ' + info.query);
+        var [gL1, ghL1] = await Promise.all([giteeLatencyPromise, githubLatencyPromise]);
+        logInfo('NET', 'Gitee 延迟:', gL1.ok ? gL1.latency + 'ms' : '超时', 
+                '| GitHub 延迟:', ghL1.ok ? ghL1.latency + 'ms' : '超时');
+        
+        return {
+          success: true,
+          ip: info.query,
+          city: info.city || '',
+          region: info.regionName || '',
+          country: info.countryCode || '',
+          org: info.isp || '',
+          isChina: (info.countryCode === 'CN'),
+          latency: {
+            gitee: gL1.ok ? gL1.latency : -1,
+            github: ghL1.ok ? ghL1.latency : -1
+          }
+        };
+      }
+    } catch(e) {
+      logInfo('NET', 'ip-api.com 失败:', e.message);
+    }
+
+    // API2: ipinfo.io (HTTPS) — 备选
+    try {
+      var info2 = await fetchIP('https://ipinfo.io/json', function(data) { return JSON.parse(data); });
+      if (info2 && info2.ip) {
+        logInfo('NET', 'IP检测成功(ipinfo): ' + info2.ip);
+        var [gL2, ghL2] = await Promise.all([giteeLatencyPromise, githubLatencyPromise]);
+        return {
+          success: true,
+          ip: info2.ip,
+          city: info2.city || '',
+          region: info2.region || '',
+          country: info2.country || '',
+          org: info2.org || '',
+          isChina: (info2.country === 'CN'),
+          latency: { gitee: gL2.ok ? gL2.latency : -1, github: ghL2.ok ? ghL2.latency : -1 }
+        };
+      }
+    } catch(e) {
+      logInfo('NET', 'ipinfo.io 失败:', e.message);
+    }
+
+    // API3: ifconfig.me (纯文本，最简单可靠)
+    try {
+      var rawIp = await fetchIP('https://ifconfig.me/ip', function(data) { return data.trim(); });
+      if (rawIp && rawIp.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+        logInfo('NET', 'IP检测成功(ifconfig): ' + rawIp);
+        var [gL3, ghL3] = await Promise.all([giteeLatencyPromise, githubLatencyPromise]);
+        return {
+          success: true,
+          ip: rawIp,
+          city: '', region: '', country: '', org: '', isChina: false,
+          latency: { gitee: gL3.ok ? gL3.latency : -1, github: ghL3.ok ? ghL3.latency : -1 }
+        };
+      }
+    } catch(e) {
+      logInfo('NET', 'ifconfig.me 也失败:', e.message);
+    }
+
+
+    // 全部失败 — 但仍返回延迟信息
+    try {
+      var [giteeLf, githubLf] = await Promise.all([giteeLatencyPromise, githubLatencyPromise]);
+      logInfo('NET', '(IP失败) Gitee 延迟:', giteeLf.ok ? giteeLf.latency + 'ms' : '超时', 
+              '| GitHub 延迟:', githubLf.ok ? githubLf.latency + 'ms' : '超时');
+      return { 
+        success: false, 
+        error: '无法获取IP信息（3个API均不可达），请检查网络',
+        latency: {
+          gitee: giteeLf.ok ? giteeLf.latency : -1,
+          github: githubLf.ok ? githubLf.latency : -1
+        }
+      };
+    } catch(latErr) {
+      return { success: false, error: '无法获取IP信息，请检查网络连接' };
+    }
+    } catch(handlerErr) {
+      logError('NET', 'get-public-ip handler 异常:', handlerErr.message || handlerErr);
+      return { success: false, error: '检测异常: ' + (handlerErr.message || String(handlerErr)) };
+    }
   });
+
+  // IPC handlers
+
+  /** 
+   * 更新检查 —— 重写为两阶段：
+   * 阶段1：先做连通性测试（5秒内出结果），失败立即返回错误给渲染进程弹窗
+   * 阶段2：连通性OK后再调 electron-updater 检查更新版本
+   */
+  ipcMain.handle('updater-check', async () => {
+    // ===== 阶段1：连通性预检（Gitee）=====
+    logInfo('UPDATE', '开始连通性预检... (Gitee)');
+    var netOk = await new Promise(function(resolve) {
+      var https = require('https');
+      var settled = false;
+      var timer = setTimeout(function() {
+        if (!settled) {
+          settled = true;
+          logInfo('UPDATE', '连通性预检超时（5秒），认为网络不可达');
+          resolve(false);
+        }
+      }, 5000);
+
+      try {
+        // 检测 Gitee 是否可达
+        var req = https.get('https://gitee.com/api/v5/repos/yansusu999/todo-list/releases/latest', {
+          headers: { 'User-Agent': 'TodoList-Updater/1.0' },
+          timeout: 7000
+        }, function(res) {
+          clearTimeout(timer);
+          if (!settled) { settled = true; resolve(true); }
+          req.abort();
+        });
+        req.on('error', function(e) {
+          clearTimeout(timer);
+          if (!settled) { settled = true; resolve(false); }
+        });
+        req.on('timeout', function() {
+          clearTimeout(timer);
+          req.destroy();
+          if (!settled) { settled = true; resolve(false); }
+        });
+      } catch(e) {
+        clearTimeout(timer);
+        resolve(false);
+      }
+    });
+
+    if (!netOk) {
+      logError('UPDATE', '连通性预检失败：Gitee不可达');
+      return { error: true, message: '无法连接到更新服务器。\n\n当前网络无法访问 Gitee。\n\n请检查网络连接后重试。' };
+    }
+
+    logInfo('UPDATE', '连通性预检通过，开始检查更新版本...');
+
+    // ===== 阶段2：正式检查更新 =====
+    try {
+      var result = await checkWithTimeout(15000);
+      logInfo('UPDATE', '检查结果:', JSON.stringify(result));
+      
+      // 返回统一格式的结果给渲染进程处理弹窗
+      if (result && result.updateInfo) {
+        return {
+          hasUpdate: !!result.updateInfo.version,
+          localVersion: app.getVersion(),
+          serverVersion: result.updateInfo.version || null,
+          releaseNotes: result.updateInfo.releaseNotes || ''
+        };
+      }
+      // 没有新版本
+      return {
+        hasUpdate: false,
+        localVersion: app.getVersion(),
+        serverVersion: (result && result.updateInfo && result.updateInfo.version) || null,
+        releaseNotes: ''
+      };
+    } catch(e) {
+      // 超时或其他异常 — 统一翻译
+      var errMsg = (e && e.message) ? String(e.message) : '';
+      if (errMsg === 'TIMEOUT') {
+        errMsg = '⏱ 更新检查超时（等待超过 15 秒无响应）。\n\n可能原因：\n• 服务器响应时间过长\n• 网络不稳定\n\n建议：稍后再试';
+      } else {
+        // 403/404 不再当作"没有找到更新"，而是作为网络错误提示
+        if (/403|forbidden/i.test(errMsg)) {
+          errMsg = '无法访问更新服务器（权限被拒绝）。\n\n可能原因：\n• Gitee 仓库可能设为私有\n• 网络环境受限\n\n建议：检查网络设置或稍后重试';
+        } else if (/404|not found/i.test(errMsg)) {
+          errMsg = '更新文件不存在。\n\n服务器上找不到 latest.yml 文件。\n\n请确认更新源配置正确。';
+        } else {
+          errMsg = translateNetError(errMsg);
+        }
+      }
+      return { error: true, message: errMsg || '更新检查失败，请稍后重试。' };
+    }
+  });
+
   ipcMain.handle('updater-download', async () => {
     return autoUpdater.downloadUpdate();
   });
+
   ipcMain.handle('updater-install', async () => {
     autoUpdater.quitAndInstall(true, true);
   });
 
-  // IPC：获取应用版本号
   ipcMain.handle('get-app-version', async () => {
     return { version: app.getVersion() };
   });
 
-  // IPC：设置更新源（镜像支持）
   ipcMain.handle('set-updater-source', async (event, source) => {
-    // 切换源时重新检测代理
-    var p = setupSystemProxySync();
-    applyProxyEnv(p);
-
+    await detectAndApplyProxy(false);
     configureFeed(source);
     return { success: true, source: source };
   });
 
-  // 启动首次自动检查
-  autoUpdater.checkForUpdates()
-    .catch(err => logError('UPDATE', 'checkForUpdates异常', err.message));
+  // 云同步/代理配置 IPC
+  ipcMain.handle('get-cloud-sync-config', async () => {
+    return getCloudSyncConfig();
+  });
+
+  ipcMain.handle('save-cloud-sync-config', async (event, config) => {
+    saveCloudSyncConfig(config);
+    if (config.manualProxy !== undefined) {
+      await detectAndApplyProxy(false);
+    }
+    return { success: true };
+  });
+
+  // 测试网络连接（检测 Gitee 可达性）
+  ipcMain.handle('test-proxy-connection', async () => {
+    return new Promise(function(resolve) {
+      var https = require('https');
+      var req = https.get('https://gitee.com/api/v5/', {
+        headers: { 'User-Agent': 'TodoList-Test/1.0' },
+        timeout: 10000
+      }, function(res) {
+        res.resume();
+        resolve({ success: true, status: res.statusCode, message: '网络连接正常!' });
+      });
+      req.on('error', function(e) {
+        resolve({ success: false, error: e.message, message: '连接失败: ' + e.message });
+      });
+      req.on('timeout', function() {
+        req.destroy();
+        resolve({ success: false, error: 'TIMEOUT', message: '连接超时(10秒)' });
+      });
+    });
+  });
+
+  /**
+   * 读取本地所有数据文件，打包为一个对象上传云端
+   * 包含 version 字段用于区分新旧格式
+   */
+  function readAllLocalData() {
+    var fs = require('fs');
+    var result = { version: 2, timestamp: new Date().toISOString() };
+
+    // 读取任务数据
+    try {
+      var tasksPath = path.join(userDataPath, 'calendar-tasks.json');
+      if (fs.existsSync(tasksPath)) {
+        result.tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+      } else {
+        result.tasks = {};
+      }
+    } catch(e) { result.tasks = {}; }
+
+    // 读取设置数据
+    try {
+      var settingsPath = path.join(userDataPath, 'calendar-settings.json');
+      if (fs.existsSync(settingsPath)) {
+        result.settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      } else {
+        result.settings = {};
+      }
+    } catch(e) { result.settings = {}; }
+
+    // 读取日期颜色数据
+    try {
+      var colorsPath = path.join(userDataPath, 'calendar-day-colors.json');
+      if (fs.existsSync(colorsPath)) {
+        result.dayColors = JSON.parse(fs.readFileSync(colorsPath, 'utf8'));
+      } else {
+        result.dayColors = {};
+      }
+    } catch(e) { result.dayColors = {}; }
+
+    // 读取云同步配置（包含 Token）
+    try {
+      if (fs.existsSync(cloudSyncConfigFile)) {
+        result.cloudConfig = JSON.parse(fs.readFileSync(cloudSyncConfigFile, 'utf8'));
+      } else {
+        result.cloudConfig = {};
+      }
+    } catch(e) { result.cloudConfig = {}; }
+
+    return result;
+  }
+
+  /**
+   * 将云端下载的数据写回各本地文件，并刷新内存状态
+   * @param {object} data - 云端数据（v1 仅含 tasks，v2 含 tasks/settings/dayColors/cloudConfig）
+   * @returns {boolean}
+   */
+  function writeAllLocalData(data) {
+    var fs = require('fs');
+
+    if (data.version === 2) {
+      // v2 格式：完整备份，写回所有文件
+      try {
+        if (data.tasks !== undefined) {
+          fs.writeFileSync(path.join(userDataPath, 'calendar-tasks.json'),
+            JSON.stringify(data.tasks, null, 2), 'utf8');
+        }
+        if (data.settings !== undefined) {
+          fs.writeFileSync(path.join(userDataPath, 'calendar-settings.json'),
+            JSON.stringify(data.settings, null, 2), 'utf8');
+        }
+        if (data.dayColors !== undefined) {
+          fs.writeFileSync(path.join(userDataPath, 'calendar-day-colors.json'),
+            JSON.stringify(data.dayColors, null, 2), 'utf8');
+        }
+        if (data.cloudConfig !== undefined) {
+          fs.writeFileSync(cloudSyncConfigFile,
+            JSON.stringify(data.cloudConfig, null, 2), 'utf8');
+        }
+      } catch(e) {
+        logError('CLOUD', '写入本地数据文件失败', e.message);
+        return false;
+      }
+    } else {
+      // v1 旧格式（仅含 tasks），只写回任务文件，保留其他文件不变
+      try {
+        fs.writeFileSync(path.join(userDataPath, 'calendar-tasks.json'),
+          JSON.stringify(data, null, 2), 'utf8');
+      } catch(e) {
+        logError('CLOUD', '写入任务文件失败（v1兼容）', e.message);
+        return false;
+      }
+    }
+
+    // 刷新内存中的数据（供渲染进程使用）
+    loadDataFromFiles();
+    return true;
+  }
+
+  // ====== 坚果云 WebDAV 实现 ======
+  function jianguoyunUpload(config) {
+    return new Promise(function(resolve, reject) {
+      var https = require('https');
+      var auth = Buffer.from(config.jianguoyun_username + ':' + config.jianguoyun_password).toString('base64');
+      var data = readAllLocalData();
+      if (!data) { reject(new Error('无法读取本地数据文件')); return; }
+
+      var body = JSON.stringify(data);
+      var urlObj = new URL('https://dav.jianguoyun.com/dav/calendar-tasks.json');
+
+      var options = {
+        hostname: urlObj.hostname,
+        port: 443,
+        path: urlObj.pathname,
+        method: 'PUT',
+        headers: {
+          'Authorization': 'Basic ' + auth,
+          'Content-Type': 'application/json;charset=utf-8',
+          'Content-Length': Buffer.byteLength(body)
+        },
+        timeout: 30000
+      };
+
+      logInfo('CLOUD', '[坚果云] 开始上传... 文件大小: ' + Math.round(body.length / 1024) + 'KB');
+      
+      var req = https.request(options, function(res) {
+        // 坚果云 WebDAV 可能返回重定向
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          logInfo('CLOUD', '[坚果云] 跟随重定向到: ' + res.headers.location);
+          // 简单处理：直接返回成功（坚果云 PUT 后常 301/302）
+          resolve({ success: true, message: '✅ 上传成功！数据已同步到坚果云' });
+          return;
+        }
+        if (res.statusCode === 200 || res.statusCode === 201 || res.statusCode === 204) {
+          resolve({ success: true, message: '✅ 上传成功！数据已同步到坚果云' });
+        } else {
+          var errBody = '';
+          res.on('data', function(c) { errBody += c; });
+          res.on('end', function() {
+            reject(new Error('上传失败(HTTP ' + res.statusCode + ')：' + (errBody || '未知错误')));
+          });
+        }
+      });
+
+      req.on('error', function(e) {
+        logError('CLOUD', '[坚果云] 上传请求失败', e.message);
+        reject(new Error('网络错误：' + e.message + '\n\n请检查：\n• 用户名和应用密码是否正确\n• 是否开启了 WebDAV 服务'));
+      });
+      req.on('timeout', function() { req.destroy(); reject(new Error('上传超时（>30秒）。检查网络或尝试更换DNS。')); });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  function jianguoyunDownload(config) {
+    return new Promise(function(resolve, reject) {
+      var https = require('https');
+      var auth = Buffer.from(config.jianguoyun_username + ':' + config.jianguoyun_password).toString('base64');
+      var urlObj = new URL('https://dav.jianguoyun.com/dav/calendar-tasks.json');
+
+      var options = {
+        hostname: urlObj.hostname,
+        port: 443,
+        path: urlObj.pathname,
+        method: 'GET',
+        headers: {
+          'Authorization': 'Basic ' + auth,
+          'Accept': '*/*'
+        },
+        timeout: 30000
+      };
+
+      logInfo('CLOUD', '[坚果云] 开始下载...');
+      
+      var req = https.request(options, function(res) {
+        if (res.statusCode === 404) {
+          reject(new Error('云端没有找到备份数据。\n\n请先在另一台设备上执行「上传」操作。'));
+          return;
+        }
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          reject(new Error('认证失败！用户名或应用密码不正确。\n\n请在坚果云 → 设置 → 安全选项 中重新生成密码。'));
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error('下载失败(HTTP ' + res.statusCode + ')。'));
+          return;
+        }
+
+        var chunks = [];
+        res.on('data', function(chunk) { chunks.push(chunk); });
+        res.on('end', function() {
+          var raw = Buffer.concat(chunks).toString('utf8');
+          try {
+            var cloudData = JSON.parse(raw);
+            
+            // 写入本地文件（writeAllLocalData 会自动识别 v1/v2 格式并写回各文件）
+            if (writeAllLocalData(cloudData)) {
+              // 通知渲染进程刷新数据
+              if (win) win.webContents.send('data-sync', {
+                tasks: tasksData,
+                settings: settingsData,
+                dayColors: dayColorsData
+              });
+              resolve({ success: true, message: '✅ 下载成功！云端数据已恢复到本地，即将自动刷新界面。' });
+            } else {
+              reject(new Error('写入本地文件失败，可能权限不足或文件被占用。'));
+            }
+          } catch(parseErr) {
+            reject(new Error('云端数据格式异常（不是有效的JSON）。\n\n可能是旧版本或不兼容的数据。'));
+          }
+        });
+      });
+
+      req.on('error', function(e) {
+        reject(new Error('网络错误：' + e.message));
+      });
+      req.on('timeout', function() { req.destroy(); reject(new Error('下载超时（>30秒）。')); });
+      req.end();
+    });
+  }
+
+  // ====== Gitee API 实现 ======
+
+  /**
+   * 用 Token 查出 Gitee 真实用户名（解决用户填邮箱而非登录名的问题）
+   */
+  function resolveGiteeUsername(token) {
+    return new Promise(function(resolve, reject) {
+      var https = require('https');
+      var urlObj = new URL('https://gitee.com/api/v5/user?access_token=' + encodeURIComponent(token));
+      https.get({
+        hostname: urlObj.hostname, path: urlObj.pathname + urlObj.search,
+        headers: { 'User-Agent': 'TodoList-CloudSync/1.0' }, timeout: 10000
+      }, function(res) {
+        var body = '';
+        res.on('data', function(c) { body += c; });
+        res.on('end', function() {
+          try { var info = JSON.parse(body); resolve(info.login); }
+          catch(e) { reject(new Error('无法获取Gitee用户信息: ' + (body || e.message))); }
+        });
+      }).on('error', function(e) { reject(new Error('查询用户名失败: ' + e.message)); })
+        .on('timeout', function() { this.destroy(); reject(new Error('查询超时')); });
+    });
+  }
+
+  /**
+   * 获取 Gitee 上已有文件的 sha（用于 PUT 更新），若文件不存在返回 null
+   */
+  function giteeGetFileSha(token, realUsername, repo) {
+    return new Promise(function(resolve) {
+      var https = require('https');
+      var apiPath = '/api/v5/repos/' + realUsername + '/' + repo + '/contents/calendar-tasks.json?access_token=' + encodeURIComponent(token);
+      https.get({
+        hostname: 'gitee.com', path: apiPath,
+        headers: { 'User-Agent': 'TodoList-CloudSync/1.0' }, timeout: 15000
+      }, function(res) {
+        var body = '';
+        res.on('data', function(c) { body += c; });
+        res.on('end', function() {
+          if (res.statusCode === 200) {
+            try { var info = JSON.parse(body); resolve(info.sha || null); }
+            catch(e) { resolve(null); }
+          } else {
+            resolve(null); // 404 = 文件不存在，其他错误也当作无 sha 处理
+          }
+        });
+      }).on('error', function() { resolve(null); })
+        .on('timeout', function() { this.destroy(); resolve(null); });
+    });
+  }
+
+  function giteeUpload(config) {
+    return new Promise(function(resolve, reject) {
+      var https = require('https');
+      var data = readAllLocalData();
+      if (!data) { reject(new Error('无法读取本地数据文件')); return; }
+
+      // 先解析真实登录名（用户可能填了邮箱），再执行上传
+      resolveGiteeUsername(config.gitee_token).then(function(realUsername) {
+        logInfo('CLOUD', '[Gitee] 解析到真实用户名: ' + realUsername + ' (输入: ' + config.gitee_username + ')');
+
+        // 先查文件是否已存在（获取 sha），决定使用 POST 创建还是 PUT 更新
+        return giteeGetFileSha(config.gitee_token, realUsername, config.gitee_repo).then(function(existingSha) {
+          var content = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
+          var bodyObj = {
+            access_token: config.gitee_token,
+            content: content,
+            message: '任务清单云备份 - ' + new Date().toLocaleString('zh-CN'),
+            branch: 'main'
+          };
+          // 文件已存在时必须带 sha，使用 PUT；否则 POST 创建
+          var method, logVerb;
+          if (existingSha) {
+            bodyObj.sha = existingSha;
+            method = 'PUT';
+            logVerb = '更新';
+          } else {
+            method = 'POST';
+            logVerb = '创建';
+          }
+          var body = JSON.stringify(bodyObj);
+          var apiPath = '/api/v5/repos/' + realUsername + '/' + config.gitee_repo + '/contents/calendar-tasks.json';
+
+          var options = {
+            hostname: 'gitee.com',
+            port: 443,
+            path: apiPath,
+            method: method,
+            headers: {
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(body),
+              'User-Agent': 'TodoList-CloudSync/1.0'
+            },
+            timeout: 30000
+          };
+
+          logInfo('CLOUD', '[Gitee] 开始' + logVerb + '文件到: ' + realUsername + '/' + config.gitee_repo + ' (sha=' + (existingSha || 'none') + ')');
+
+          return new Promise(function(res2, rej2) {
+            var req = https.request(options, function(res) {
+              var respBody = '';
+              res.on('data', function(c) { respBody += c; });
+              res.on('end', function() {
+                logInfo('CLOUD', '[Gitee] 响应状态: ' + res.statusCode);
+                if (res.statusCode === 200 || res.statusCode === 201) {
+                  res2({ success: true, message: '✅ 上传成功！数据已推送到 Gitee 仓库' });
+                } else if (res.statusCode === 404) {
+                  rej2(new Error('仓库不存在或无访问权限。\n\n请确认：\n• 仓库名拼写正确\n• Token 有「projects」读写权限\n• 仓库是私有且你拥有访问权'));
+                } else if (res.statusCode === 401 || res.statusCode === 403) {
+                  rej2(new Error('Token 认证失败或无权限。\n\n请确认 Token 正确且有「projects」权限。'));
+                } else {
+                  try {
+                    var errInfo = JSON.parse(respBody);
+                    rej2(new Error('上传失败：' + (errInfo.message || respBody)));
+                  } catch(e) {
+                    rej2(new Error('上传失败(HTTP ' + res.statusCode + ')'));
+                  }
+                }
+              });
+            });
+            req.on('error', function(e) {
+              logError('CLOUD', '[Gitee] 上传失败', e.message);
+              rej2(new Error('网络错误：' + e.message + '\n\nGitee API 需要能正常访问 gitee.com'));
+            });
+            req.on('timeout', function() { req.destroy(); rej2(new Error('上传超时（>30秒）。')); });
+            req.write(body);
+            req.end();
+          });
+        });
+      }).then(resolve).catch(reject);
+    });
+  }
+
+  function giteeDownload(config) {
+    return new Promise(function(resolve, reject) {
+      // 同样先解析真实用户名
+      resolveGiteeUsername(config.gitee_token).then(function(realUsername) {
+        var https = require('https');
+        var tokenParam = '?access_token=' + encodeURIComponent(config.gitee_token);
+        var apiPath = '/api/v5/repos/' + realUsername + '/' + config.gitee_repo + '/contents/calendar-tasks.json' + tokenParam;
+
+      var options = {
+        hostname: 'gitee.com',
+        port: 443,
+        path: apiPath,
+        method: 'GET',
+        headers: {
+          'User-Agent': 'TodoList-CloudSync/1.0'
+        },
+        timeout: 30000
+      };
+
+      logInfo('CLOUD', '[Gitee] 开始下载...');
+
+        var req = https.request(options, function(res) {
+          var respBody = '';
+          res.on('data', function(c) { respBody += c; });
+          res.on('end', function() {
+            if (res.statusCode === 404) {
+              reject(new Error('云端没有找到备份数据。\n\n请先在另一台设备上执行「上传」操作。'));
+              return;
+            }
+            if (res.statusCode === 401 || res.statusCode === 403) {
+              reject(new Error('Token 认证失败或无权限。'));
+              return;
+            }
+            if (res.statusCode !== 200) {
+              reject(new Error('下载失败(HTTP ' + res.statusCode + ')。'));
+              return;
+            }
+
+            try {
+              var fileInfo = JSON.parse(respBody);
+              var content = Buffer.from(fileInfo.content, 'base64').toString('utf8');
+              var cloudData = JSON.parse(content);
+
+              if (writeAllLocalData(cloudData)) {
+                // 通知渲染进程刷新数据
+                if (win) win.webContents.send('data-sync', {
+                  tasks: tasksData,
+                  settings: settingsData,
+                  dayColors: dayColorsData
+                });
+                resolve({ success: true, message: '✅ 下载成功！云端数据已恢复到本地，界面将自动刷新。' });
+              } else {
+                reject(new Error('写入本地文件失败，可能权限不足或文件被占用。'));
+              }
+            } catch(parseErr) {
+              reject(new Error('云端数据解析失败：' + parseErr.message));
+            }
+          });
+        });
+
+        req.on('error', function(e) {
+          reject(new Error('网络错误：' + e.message));
+        });
+        req.on('timeout', function() { req.destroy(); reject(new Error('下载超时（>30秒）。')); });
+        req.end();
+      }).catch(function(err) {
+        reject(err); // 用户名解析失败
+      });
+    });
+  }
+
+  // 云同步上传/下载 —— 完整实现
+  ipcMain.handle('cloud-upload', async (event, provider) => {
+    var config = getCloudSyncConfig();
+
+    if (provider === 'jianguoyun') {
+      if (!config.jianguoyun_username || !config.jianguoyun_password) {
+        return { success: false, error: 'CONFIG_MISSING', message: '❌ 请先填写坚果云的邮箱和密码，点击「保存」后再上传。' };
+      }
+      logInfo('CLOUD', '开始上传 [坚果云 WebDAV]');
+      try {
+        return await jianguoyunUpload(config);
+      } catch(e) {
+        return { success: false, error: 'UPLOAD_FAIL', message: '⚠️ 上传失败：' + e.message };
+      }
+    } else if (provider === 'gitee') {
+      if (!config.gitee_token || !config.gitee_repo) {
+        return { success: false, error: 'CONFIG_MISSING', message: '❌ 请先填写 Gitee Token 和仓库名，点击「保存」后再上传。' };
+      }
+      logInfo('CLOUD', '开始上传 [Gitee]');
+      try {
+        return await giteeUpload(config);
+      } catch(e) {
+        return { success: false, error: 'UPLOAD_FAIL', message: '⚠️ 上传失败：' + e.message };
+      }
+    }
+
+    return { success: false, error: 'UNKNOWN_PROVIDER', message: '未知的云服务提供商: ' + provider };
+  });
+
+  ipcMain.handle('cloud-download', async (event, provider) => {
+    var config = getCloudSyncConfig();
+
+    if (provider === 'jianguoyun') {
+      if (!config.jianguoyun_username || !config.jianguoyun_password) {
+        return { success: false, error: 'CONFIG_MISSING', message: '❌ 请先填写坚果云的邮箱和密码，点击「保存」后再下载。' };
+      }
+      logInfo('CLOUD', '开始下载 [坚果云 WebDAV]');
+      try {
+        return await jianguoyunDownload(config);
+      } catch(e) {
+        return { success: false, error: 'DOWNLOAD_FAIL', message: '⚠️ 下载失败：' + e.message };
+      }
+    } else if (provider === 'gitee') {
+      if (!config.gitee_token || !config.gitee_repo) {
+        return { success: false, error: 'CONFIG_MISSING', message: '❌ 请先填写 Gitee Token 和仓库名，点击「保存」后再下载。' };
+      }
+      logInfo('CLOUD', '开始下载 [Gitee]');
+      try {
+        return await giteeDownload(config);
+      } catch(e) {
+        return { success: false, error: 'DOWNLOAD_FAIL', message: '⚠️ 下载失败：' + e.message };
+      }
+    }
+
+    return { success: false, error: 'UNKNOWN_PROVIDER', message: '未知的云服务提供商: ' + provider };
+  });
+
+  // 获取 Gitee 上 calendar-tasks.json 的历史提交列表
+  ipcMain.handle('cloud-list-versions', async () => {
+    var config = getCloudSyncConfig();
+    if (!config.gitee_token || !config.gitee_repo) {
+      return { success: false, message: '❌ 请先保存 Gitee 配置' };
+    }
+    try {
+      var realUsername = await resolveGiteeUsername(config.gitee_token);
+      var versions = await new Promise(function(resolve, reject) {
+        var https = require('https');
+        var apiPath = '/api/v5/repos/' + realUsername + '/' + config.gitee_repo
+          + '/commits?access_token=' + encodeURIComponent(config.gitee_token)
+          + '&path=calendar-tasks.json&limit=20';
+        https.get({
+          hostname: 'gitee.com', path: apiPath,
+          headers: { 'User-Agent': 'TodoList-CloudSync/1.0' }, timeout: 15000
+        }, function(res) {
+          var body = '';
+          res.on('data', function(c) { body += c; });
+          res.on('end', function() {
+            if (res.statusCode !== 200) {
+              reject(new Error('获取历史失败(HTTP ' + res.statusCode + ')'));
+              return;
+            }
+            try {
+              var commits = JSON.parse(body);
+              if (!Array.isArray(commits) || commits.length === 0) {
+                resolve([]);
+                return;
+              }
+              var list = commits.map(function(c) {
+                return {
+                  sha: c.sha,
+                  message: c.commit.message,
+                  date: c.commit.committer.date,
+                  author: c.commit.committer.name
+                };
+              });
+              resolve(list);
+            } catch(e) {
+              reject(new Error('解析历史数据失败: ' + e.message));
+            }
+          });
+        }).on('error', function(e) { reject(e); })
+          .on('timeout', function() { this.destroy(); reject(new Error('请求超时')); });
+      });
+      return { success: true, versions: versions };
+    } catch(e) {
+      return { success: false, message: '⚠️ ' + e.message };
+    }
+  });
+
+  // 按指定 commit sha 下载某个历史版本
+  ipcMain.handle('cloud-download-version', async (event, commitSha) => {
+    var config = getCloudSyncConfig();
+    if (!config.gitee_token || !config.gitee_repo) {
+      return { success: false, message: '❌ 请先保存 Gitee 配置' };
+    }
+    try {
+      var realUsername = await resolveGiteeUsername(config.gitee_token);
+      var result = await new Promise(function(resolve, reject) {
+        var https = require('https');
+        // 用指定 ref（commit sha）获取文件内容
+        var apiPath = '/api/v5/repos/' + realUsername + '/' + config.gitee_repo
+          + '/contents/calendar-tasks.json?access_token=' + encodeURIComponent(config.gitee_token)
+          + '&ref=' + encodeURIComponent(commitSha);
+        https.get({
+          hostname: 'gitee.com', path: apiPath,
+          headers: { 'User-Agent': 'TodoList-CloudSync/1.0' }, timeout: 30000
+        }, function(res) {
+          var respBody = '';
+          res.on('data', function(c) { respBody += c; });
+          res.on('end', function() {
+            if (res.statusCode !== 200) {
+              reject(new Error('下载失败(HTTP ' + res.statusCode + ')'));
+              return;
+            }
+            try {
+              var fileInfo = JSON.parse(respBody);
+              var content = Buffer.from(fileInfo.content, 'base64').toString('utf8');
+              var cloudData = JSON.parse(content);
+              if (writeAllLocalData(cloudData)) {
+                if (win) win.webContents.send('data-sync', {
+                  tasks: tasksData,
+                  settings: settingsData,
+                  dayColors: dayColorsData
+                });
+                resolve({ success: true, message: '✅ 历史版本已恢复！界面将自动刷新。' });
+              } else {
+                reject(new Error('写入本地文件失败'));
+              }
+            } catch(e) {
+              reject(new Error('解析数据失败: ' + e.message));
+            }
+          });
+        }).on('error', function(e) { reject(e); })
+          .on('timeout', function() { this.destroy(); reject(new Error('下载超时')); });
+      });
+      return result;
+    } catch(e) {
+      return { success: false, message: '⚠️ ' + e.message };
+    }
+  });
+
+  // 启动首次自动检查（带30秒超时）
+  checkWithTimeout(30000)
+    .then(info => logInfo('UPDATE', '首次检查完成', info))
+    .catch(err => logError('UPDATE', '首次检查异常', err.message));
 }
 
 // 双重保险：应用退出前再保存一次（防止close事件被跳过）

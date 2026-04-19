@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>日历清单</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 自定义标题栏（Electron 无边框模式专用） -->
+  <div id="titlebar">
+    <div id="titlebar-drag">
+      <span id="titlebar-title">日历清单</span>
+      <span id="desktop-mode-badge" class="hidden">📌 已固定</span>
+    </div>
+    <div id="titlebar-controls">
+      <!-- 桌面模式切换按钮 -->
+      <button class="titlebar-btn desktop-toggle" id="desktop-toggle-btn" title="桌面模式">
+        <span id="desktop-toggle-icon">📌</span>
+        <span id="desktop-toggle-text">桌面模式</span>
+      </button>
+      <!-- 窗口控制按钮 -->
+      <button class="titlebar-btn" id="titlebar-minimize" title="最小化">─</button>
+      <button class="titlebar-btn" id="titlebar-maximize" title="最大化">□</button>
+      <button class="titlebar-btn close-btn" id="titlebar-close" title="关闭">✕</button>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- 顶部标题栏（可拖动） -->
+    <div id="header">
+      <div id="header-left">
+        <button class="nav-btn" id="prevMonth" title="上一月">&#8249;</button>
+      </div>
+      <div id="header-center">
+        <span id="year-month"></span>
+        <span id="lunar-info"></span>
+      </div>
+      <div id="header-right">
+        <button class="nav-btn" id="nextMonth" title="下一月">&#8250;</button>
+        <button class="icon-btn" id="todayBtn" title="回到今天">今</button>
+        <button class="icon-btn" id="settingsBtn" title="设置">⚙</button>
+      </div>
+    </div>
+
+    <!-- 星期头 -->
+    <div id="weekdays">
+      <div class="weekday">星期一</div>
+      <div class="weekday">星期二</div>
+      <div class="weekday">星期三</div>
+      <div class="weekday">星期四</div>
+      <div class="weekday">星期五</div>
+      <div class="weekday weekend">星期六</div>
+      <div class="weekday weekend">星期日</div>
+    </div>
+
+    <!-- 日历格子区域 -->
+    <div id="calendar-grid"></div>
+
+    <!-- 右下角拖拽调整大小手柄 -->
+    <div id="resize-handle" title="拖动调整大小"></div>
+  </div>
+
+  <!-- 任务编辑浮窗（轻量小浮层） -->
+  <div id="task-popup" class="hidden">
+    <!-- 浮窗标题栏 -->
+    <div class="popup-header" id="popup-header">
+      <div class="popup-title-wrap">
+        <span id="popup-date-title"></span>
+        <span id="popup-lunar"></span>
+      </div>
+      <button class="popup-close" id="popup-close" title="关闭">✕</button>
+    </div>
+
+    <!-- 任务列表 -->
+    <div class="popup-body" id="popup-body">
+      <ul id="popup-task-list"></ul>
+    </div>
+
+    <!-- 添加任务 -->
+    <div class="popup-add">
+      <input type="text" id="popup-task-input" placeholder="添加任务，按回车确认..." maxlength="100" />
+    </div>
+
+    <!-- 底部分隔栏（颜色选择） -->
+    <div class="popup-footer">
+      <div class="popup-color-row">
+        <span class="popup-color-label">颜色：</span>
+        <div class="popup-color-dots" id="popup-color-picker"></div>
+        <button class="popup-clear-color" id="popup-clear-color" title="清除颜色">清除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置面板 -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-overlay" id="settings-overlay"></div>
+    <div class="modal-box settings-box">
+      <div class="modal-header">
+        <span>⚙ 设置</span>
+        <button class="modal-close" id="settings-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section-title">窗口</div>
+        <div class="settings-row">
+          <label>桌面模式</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="desktop-mode-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row desktop-mode-hint">
+          <label></label>
+          <span class="hint-text">桌面模式：窗口固定在桌面，不可拖动，适合作为桌面小工具使用</span>
+        </div>
+
+        <div class="settings-section-title">外观</div>
+        <div class="settings-row">
+          <label>主题颜色</label>
+          <div class="theme-options" id="theme-options">
+            <div class="theme-dot" data-theme="dark" style="background:#1a1a2e" title="深蓝夜空"></div>
+            <div class="theme-dot" data-theme="black" style="background:#0d0d0d" title="纯黑"></div>
+            <div class="theme-dot" data-theme="forest" style="background:#0f2d1f" title="深林绿"></div>
+            <div class="theme-dot" data-theme="purple" style="background:#1a0a2e" title="紫色魅惑"></div>
+            <div class="theme-dot" data-theme="blue" style="background:#0a1628" title="深海蓝"></div>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>背景透明度</label>
+          <div class="slider-wrap">
+            <input type="range" id="opacity-slider" min="30" max="100" value="85" />
+            <span id="opacity-value">85%</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>背景颜色</label>
+          <div class="color-input-wrap">
+            <input type="color" id="bg-color-picker" value="#0d1117" />
+            <button class="reset-btn" id="reset-bg-color" title="恢复默认">重置</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>字体颜色</label>
+          <div class="color-input-wrap">
+            <input type="color" id="font-color-picker" value="#e0e8f0" />
+            <button class="reset-btn" id="reset-font-color" title="恢复默认">重置</button>
+          </div>
+        </div>
+
+        <div class="settings-section-title">显示</div>
+        <div class="settings-row">
+          <label>任务字号</label>
+          <select id="font-size-select">
+            <option value="11">小（11px）</option>
+            <option value="12" selected>默认（12px）</option>
+            <option value="13">中（13px）</option>
+            <option value="14">大（14px）</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label>首列星期</label>
+          <select id="week-start-select">
+            <option value="1" selected>星期一</option>
+            <option value="0">星期日</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label>显示农历</label>
+          <input type="checkbox" id="show-lunar" checked />
+        </div>
+        <div class="settings-row">
+          <label>显示节假日</label>
+          <input type="checkbox" id="show-holiday" checked />
+        </div>
+
+        <div class="settings-section-title">数据</div>
+        <div class="settings-row">
+          <label>导出数据</label>
+          <button id="export-data-btn" class="action-btn">导出 JSON</button>
+        </div>
+        <div class="settings-row">
+          <label>导入数据</label>
+          <button id="import-data-btn" class="action-btn">导入 JSON</button>
+          <input type="file" id="import-file-input" accept=".json" style="display:none" />
+        </div>
+        <div class="settings-row danger-row">
+          <label>清除所有数据</label>
+          <button id="clear-all-btn" class="danger-btn">清除</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右键菜单 -->
+  <div id="context-menu" class="hidden">
+    <div class="ctx-item" id="ctx-edit">✏️ 编辑任务</div>
+    <div class="ctx-item" id="ctx-color">🎨 设置颜色</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item danger" id="ctx-clear">🗑️ 清空当天</div>
+  </div>
+
+  <script src="lunar.js"></script>
+  <script src="holidays.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

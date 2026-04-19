@@ -1,0 +1,7 @@
+{
+  "name": "calendar-list",
+  "version": "1.0.0",
+  "description": "桌面日历与任务管理工具",
+  "author": "CalendarApp",
+  "main": "main.js"
+}

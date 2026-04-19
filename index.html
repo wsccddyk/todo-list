@@ -39,6 +39,7 @@
       <div id="header-right">
         <button class="nav-btn" id="nextMonth" title="下一月">&#8250;</button>
         <button class="icon-btn" id="todayBtn" title="回到今天">今</button>
+        <button class="icon-btn" id="cloudSyncBtn" title="云同步">☁</button>
         <button class="icon-btn" id="settingsBtn" title="设置">⚙</button>
       </div>
     </div>
@@ -464,7 +465,7 @@
         <div class="settings-panel" id="panel-about">
           <div class="about-header-area">
             <h2 class="about-app-name" data-i18n="appName">任务清单</h2>
-            <p class="about-version"><span id="about-version-label" data-i18n="localVersion">本地版本：</span>v9.8.3 (2026-04-18)</p>
+            <p class="about-version"><span id="about-version-label" data-i18n="localVersion">本地版本：</span>v9.9.3 (2026-04-19)</p>
             <p class="about-copyright" data-i18n="copyright">Copyright &copy; 2026 爆肝. All rights reserved.</p>
           </div>
 
@@ -473,15 +474,53 @@
             <div class="settings-row">
               <label data-i18n="updateSourceLabel">更新源</label>
               <select id="update-source-select" style="max-width:220px;">
-                <option value="github" selected data-i18n-opt="sourceGithub">GitHub 官方（需代理）</option>
-                <option value="ghproxy" data-i18n-opt="sourceGhproxy">ghproxy 镜像（推荐国内）</option>
-                <option value="ghfast" data-i18n-opt="sourceGhfast">ghfast 镜像（备用）</option>
+                <option value="gitee" selected data-i18n-opt="sourceGitee">Gitee（国内直连）</option>
+                <option value="github" data-i18n-opt="sourceGithub">GitHub（需代理）</option>
               </select>
             </div>
             <div class="settings-row" style="justify-content:center;">
               <button id="btn-check-update-about" class="action-btn primary-btn" style="padding:8px 28px;font-size:14px;" data-i18n="updateCheck">🔄 立即检查更新</button>
             </div>
             <div id="update-status-text" class="settings-hint-row" style="text-align:center;"></div>
+          </div>
+
+          <div class="settings-group">
+            <h3 class="about-section-title">
+              <span>🌐 网络状态</span>
+              <button class="btn-toggle-expand" id="toggle-proxy-panel" title="展开/收起">▾</button>
+            </h3>
+            <div id="proxy-panel" style="padding-top:12px;">
+              <!-- 自动检测公网IP -->
+              <div class="settings-row" style="flex-direction:column;align-items:stretch;" id="network-status-row">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                  <span style="font-size:13px;color:var(--text-secondary);">当前出口 IP：</span>
+                  <button id="btn-detect-ip" class="action-btn secondary-btn" style="padding:4px 14px;font-size:12px;">🔄 检测 IP</button>
+                </div>
+                <div id="ip-display-area" style="background:var(--bg-secondary);padding:10px 14px;border-radius:6px;border-left:3px solid var(--accent);">
+                  <span style="color:var(--text-tertiary);font-size:12px;">点击「检测 IP」查看当前网络出口...</span>
+                </div>
+              </div>
+
+              <!-- 手动代理（折叠） -->
+              <details style="margin-top:10px;">
+                <summary style="cursor:pointer;font-size:12px;color:var(--text-tertiary);padding:4px 0;">⚙️ 高级：手动填写代理地址</summary>
+                <div style="padding-top:8px;margin-top:4px;border-top:1px solid var(--border-color);">
+                  <div class="settings-row" style="flex-direction:column;align-items:stretch;">
+                    <label style="font-size:12px;color:var(--text-tertiary);margin-bottom:5px;">代理地址（仅自动检测失败时需要填）</label>
+                    <div style="display:flex;gap:6px;">
+                      <input type="text" id="manual-proxy-input"
+                        placeholder="例如：127.0.0.1:7890"
+                        style="flex:1;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--input-bg);color:var(--text-primary);font-size:12px;font-family:Consolas,monospace;" />
+                      <button id="btn-save-proxy" class="action-btn secondary-btn" style="padding:6px 12px;font-size:12px;">保存</button>
+                    </div>
+                    <div id="proxy-test-result" class="settings-hint-row" style="margin-top:4px;"></div>
+                  </div>
+                  <div class="settings-hint-row" style="font-size:11px;color:var(--text-tertiary);line-height:1.5;">
+                    软件会自动检测 Windows 注册表中的系统代理。Clash/V2Ray 开启 System Proxy 即可。
+                  </div>
+                </div>
+              </details>
+            </div>
           </div>
 
           <div class="settings-group">

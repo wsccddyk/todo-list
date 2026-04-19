@@ -1,12 +1,12 @@
 {
   "name": "calendar-list",
-  "version": "9.8.3",
+  "version": "9.9.3",
   "description": "桌面日历与任务管理工具",
   "author": "CalendarApp",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "set ELECTRON_SKIP_SIGNING=true && set CSC_IDENTITY_AUTO_DISCOVERY=false && npx electron-builder --win --x64"
+    "build": "set ELECTRON_SKIP_SIGNING=true && set CSC_IDENTITY_AUTO_DISCOVERY=false && set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ && npx electron-builder --win --x64"
   },
   "devDependencies": {
     "electron": "33.4.0",
@@ -20,6 +20,9 @@
     },
     "extraMetadata": {
       "main": "main.js"
+    },
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
     },
     "files": [
       "main.js",
@@ -48,7 +51,8 @@
         }
       ],
       "icon": "icon.ico",
-      "sign": false,
+      "signAndEditExecutable": false,
+      "forceCodeSigning": false,
       "publisherName": "Baogan"
     },
     "nsis": {
@@ -62,9 +66,8 @@
       "createStartMenuShortcut": true
     },
     "publish": {
-      "provider": "github",
-      "owner": "wsccddyk",
-      "repo": "todo-list"
+      "provider": "generic",
+      "url": "https://gitee.com/yansusu999/todo-list/raw/master/latest.yml"
     },
     "asar": false
   },

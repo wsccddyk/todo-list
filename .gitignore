@@ -14,6 +14,12 @@ out/
 # Logs
 *.log
 build-output*.txt
+build-log*.txt
+build_log*.txt
+build_out.txt
+build-nsis-log.txt
+build-error.txt
+run-log.txt
 
 # OS files
 .DS_Store

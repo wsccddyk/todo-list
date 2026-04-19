@@ -55,4 +55,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateStatus: (callback) => {
     ipcRenderer.on('update-status', (event, data) => callback(data));
   },
+
+  // 云同步/代理配置
+  getCloudSyncConfig: () => ipcRenderer.invoke('get-cloud-sync-config'),
+  saveCloudSyncConfig: (config) => ipcRenderer.invoke('save-cloud-sync-config', config),
+  testProxyConnection: () => ipcRenderer.invoke('test-proxy-connection'),
+  cloudUpload: (provider) => ipcRenderer.invoke('cloud-upload', provider),
+  cloudDownload: (provider) => ipcRenderer.invoke('cloud-download', provider),
+  cloudListVersions: () => ipcRenderer.invoke('cloud-list-versions'),
+  cloudDownloadVersion: (sha) => ipcRenderer.invoke('cloud-download-version', sha),
+
+  // 网络状态 / 公网IP检测
+  getPublicIp: () => ipcRenderer.invoke('get-public-ip'),
 });
