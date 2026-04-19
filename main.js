@@ -607,19 +607,36 @@ function createWindow() {
   // 开机自启动
   ipcMain.handle('set-auto-start', async (event, enabled) => {
     try {
-      // process.execPath 在打包后可能指向临时目录，需要用 app.getPath('exe')
       var exePath = app.isPackaged ? process.execPath : app.getPath('exe');
       logInfo('AUTO_START', 'exe路径: ' + exePath);
       logInfo('AUTO_START', 'isPackaged: ' + app.isPackaged);
+
+      // 关键修复：必须指定 name 参数，否则 Electron 使用默认名 "Electron"
+      // 导致注册表键名为 "electron.app.Electron" 而非中文应用名
       app.setLoginItemSettings({
         openAtLogin: !!enabled,
+        name: app.name || '任务清单',  // 注册表中的条目名称
         path: exePath,
         args: []
       });
+
       // 验证是否设置成功
       var loginSettings = app.getLoginItemSettings();
       logInfo('AUTO_START', enabled ? '已启用开机自启动' : '已关闭开机自启动');
       logInfo('AUTO_START', '验证 - openAtLogin: ' + loginSettings.openAtLogin + ', executableWillLaunchAtLogin: ' + loginSettings.executableWillLaunchAtLogin);
+
+      // 二次验证：直接检查注册表值是否正确写入
+      var regValue = null;
+      try {
+        regValue = require('child_process').execSync(
+          'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "' + (app.name || '任务清单') + '"',
+          { encoding: 'utf8' }
+        );
+        logInfo('AUTO_START', '注册表验证:\n' + regValue.trim());
+      } catch(e2) {
+        logError('AUTO_START', '注册表读取异常: ' + e2.message);
+      }
+
       return { success: true, verified: loginSettings.openAtLogin === !!enabled };
     } catch(e) {
       logError('AUTO_START', '设置开机自启动失败: ' + e.message);
@@ -653,6 +670,31 @@ function createWindow() {
 
 // 应用启动
 app.whenReady().then(() => {
+  // 设置应用名称（用于注册表自启条目名等系统级功能）
+  app.name = '任务清单';
+
+  // 清理旧的错误自启条目（历史遗留：键名为 "electron.app.Electron" 而非 "任务清单"）
+  try {
+    var { execSync } = require('child_process');
+    var oldEntry = execSync(
+      'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "electron.app.Electron"',
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    // 如果旧条目存在且指向当前 exe 或不存在的路径，删除它
+    logInfo('AUTO_START', '发现旧自启条目 "electron.app.Electron"，正在清理...');
+    try {
+      execSync(
+        'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "electron.app.Electron" /f',
+        { encoding: 'utf8' }
+      );
+      logInfo('AUTO_START', '旧自启条目已清理');
+    } catch(e2) {
+      logError('AUTO_START', '清理旧条目失败: ' + e2.message);
+    }
+  } catch(e) {
+    // 旧条目不存在或无法读取 → 无需处理
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
