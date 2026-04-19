@@ -1025,9 +1025,9 @@ function checkForUpdates() {
   function translateNetError(rawMsg) {
     var msg = String(rawMsg || '');
 
-    // 403/404 等服务端拒绝访问 → 当作"找不到更新"处理（不暴露仓库私有等细节）
+    // 403/404 等服务端拒绝访问 → 当作"没有更新"处理（不暴露仓库私有等细节）
     if (/403|404|forbidden|not found|Not Found|拒绝访问|访问被拒绝/i.test(msg)) {
-      return '暂时没有找到更新的版本';
+      return 'NO_UPDATE_AVAILABLE'; // 特殊标记，让调用方转为 not-available
     }
 
     // 超时类
@@ -1068,9 +1068,16 @@ function checkForUpdates() {
     logError('UPDATE', '更新检查失败', errMsg);
 
     // 统一翻译为中文友好提示
-    errMsg = translateNetError(errMsg);
+    var translated = translateNetError(errMsg);
 
-    if (win) win.webContents.send('update-status', { state: 'error', message: errMsg });
+    // 特殊标记：403/404 视为"无新版本"而非错误
+    if (translated === 'NO_UPDATE_AVAILABLE') {
+      logInfo('UPDATE', '服务器返回 403/404，视为无新版本');
+      if (win) win.webContents.send('update-status', { state: 'not-available', version: app.getVersion() });
+      return;
+    }
+
+    if (win) win.webContents.send('update-status', { state: 'error', message: translated });
   });
 
   /**
