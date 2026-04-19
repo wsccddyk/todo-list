@@ -1,9 +1,10 @@
 # 📅 任务清单 (TodoList)
 
-> 一款轻量级桌面日历与任务管理工具，基于 Electron 构建。支持中英文双语、深色主题、农历显示、HTTP API 等丰富功能。
+> 一款轻量级桌面日历与任务管理工具，基于 Electron 构建。支持中英文双语、深色主题、农历显示、公网 IP 检测、服务器延迟监控、云同步等丰富功能。
 
-[![Release](https://img.shields.io/github/v/release/baogan/calendar-list)](https://github.com/baogan/calendar-list/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/baogan/calendar-list/releases)
+[![Release](https://img.shields.io/github/v/release/wsccddyk/todo-list)](https://github.com/wsccddyk/todo-list/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/wsccddyk/todo-list/releases)
+[![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 ![任务清单截图](docs/screenshot.png)
 
@@ -23,6 +24,15 @@
 - **日期颜色标记** — 7 种预设背景色标记重要日期
 - **右键菜单** — 快速编辑、颜色设置、清空任务
 
+### 🌐 网络工具
+- **公网 IP 检测** — 一键获取当前公网 IP 地址及地理位置信息（城市、运营商）
+- **服务器延迟监控** — 实时检测 **Gitee** 和 **GitHub** 的连接延迟（毫秒级）
+  - 🟢 **< 2000ms** — 绿色显示具体延迟
+  - 🟡 **≥ 2000ms** — 黄色显示 "2000ms+"
+  - 🔴 **超时/不可达** — 红色显示 "超时"
+- **多 API 自动切换** — ip-api.com → ipinfo.io → ifconfig.me，国内直连优先
+- **代理感知** — 自动检测系统代理，支持 VPN/TUN 环境
+
 ### 🎨 外观定制
 - **5 种深色主题** — 深蓝夜空 / 纯黑 / 深林绿 / 紫色魅惑 / 深海蓝
 - **透明度调节** — 30% ~ 100% 背景透明度滑块
@@ -35,19 +45,22 @@
 - **置顶显示** — 可选始终在最前
 - **开机自启** — 支持系统启动时自动运行
 
+### 🔄 云同步 & 自动更新
+- **Gitee 云同步** — 数据备份到 Gitee 仓库，跨设备同步
+- **自动更新** — 基于 Gitee Release，国内直连无需翻墙
+- **更新源切换** — 支持多个更新镜像源
+- **超时自动断开** — 25 秒超时机制，避免无限等待
+- **连通性预检** — 更新前先检测网络是否可达
+- **实时状态反馈** — 显示"已等待 X 秒"，不再盲目等待
+
 ### 🌍 国际化
 - **中文 / 英文** 双语切换（设置 → Language）
 - 全界面翻译：菜单、弹窗、更新提示、日志等均适配
 
-### 🔄 自动更新
-- 基于 **GitHub Release** 的自动更新机制
-- 支持 **镜像源切换**（ghproxy / ghfast）解决国内访问问题
-- 超时自动检测（25 秒），避免无限等待
-
-### 📊 运行日志
-- 内置日志系统，记录所有操作
-- 支持按关键词搜索、按日期筛选
-- 日志保留天数可配置（默认 7 天）
+### 📊 运行日志 & 数据
+- **内置日志系统** — 记录所有操作，支持搜索和日期筛选
+- **数据导出/导入** — JSON 格式备份与恢复
+- **Excel 导出** — 支持 xlsx 格式导出任务数据
 
 ---
 
@@ -89,29 +102,29 @@ curl http://localhost:7789/api/health
 # 添加任务
 curl -X POST http://localhost:7789/api/tasks \
   -H "Content-Type: application/json" \
-  -d '{"year":2026,"month":4,"day":16,"text":"下午开会"}'
+  -d '{"year":2026,"month":4,"day":19,"text":"下午开会"}'
 
 # 获取某天任务
-curl http://localhost:7789/api/tasks/2026-4-16
+curl http://localhost:7789/api/tasks/2026-4-19
 
 # 导出所有数据
 curl http://localhost:7789/api/export
 ```
 
-### JavaScript API（浏览器控制台 / DevTools）
+### JavaScript API（浏览器控制台）
 
 ```javascript
 // 获取所有任务
 CalendarApp.getTasks()
 
 // 获取/添加/删除任务
-CalendarApp.getTasksForDate(2026, 4, 16)
-CalendarApp.addTask(2026, 4, 16, '开会讨论')
-CalendarApp.removeTask(2026, 4, 16, taskId)
+CalendarApp.getTasksForDate(2026, 4, 19)
+CalendarApp.addTask(2026, 4, 19, '开会讨论')
+CalendarApp.removeTask(2026, 4, 19, taskId)
 
 // 日期颜色
-CalendarApp.getDayColor(2026, 4, 16)
-CalendarApp.setDayColor(2026, 4, 16, 'rgba(74,158,255,0.15)')
+CalendarApp.getDayColor(2026, 4, 19)
+CalendarApp.setDayColor(2026, 4, 19, 'rgba(74,158,255,0.15)')
 
 // 设置操作
 CalendarApp.getSettings()
@@ -131,12 +144,10 @@ calendar-app/
 ├── index.html      # 主页面
 ├── style.css       # 样式表
 ├── app.js          # 应用主逻辑（渲染、i18n、事件处理）
-├── lunar.js        # 农历算法库
-├── holidays.js     # 节假日数据库（2024-2027）
-├── main.js         # Electron 主进程（窗口管理、自动更新、API 服务）
+├── main.js         # Electron 主进程（窗口管理、自动更新、API 服务、网络检测）
 ├── preload.js      # Electron 预加载脚本（安全桥接）
 ├── package.json    # 项目配置 & 构建脚本
-└── do-build.ps1    # 打包构建脚本
+└── icon.ico        # 应用图标
 ```
 
 ## 💾 数据存储
@@ -149,14 +160,14 @@ calendar-app/
 
 ### 方式一：下载安装包
 
-从 [GitHub Releases](https://github.com/baogan/calendar-list/releases) 下载最新版 zip 包，解压后运行 `任务清单.exe` 即可。**无需安装，即开即用。**
+从 [GitHub Releases](https://github.com/wsccddyk/todo-list/releases) 或 [Gitee Releases](https://gitee.com/yansusu999/todo-list/releases) 下载最新版安装包。**即开即用。**
 
 ### 方式二：从源码构建
 
 ```bash
 # 克隆仓库
-git clone https://github.com/baogan/calendar-list.git
-cd calendar-list
+git clone https://github.com/wsccddyk/todo-list.git
+cd todo-list
 
 # 安装依赖
 npm install
@@ -190,6 +201,7 @@ npm run build
 | 导出/导入 | ⚙️ → 数据 → 导出 JSON / 导入 JSON |
 | 切换语言 | ⚙️ → Language → 中文 / English |
 | 检查更新 | ⚙️ → 关于 → 「🔄 立即检查更新」 |
+| 检测 IP | 设置面板中点击「🌐 检测 IP」按钮 |
 
 ---
 
@@ -197,34 +209,48 @@ npm run build
 
 | 技术 | 用途 |
 |------|------|
-| [Electron](https://www.electronjs.org/) | 桌面应用框架 |
-| [electron-updater](https://github.com/nicedoc/electron-updater) | 自动更新（GitHub Release） |
+| [Electron](https://www.electronjs.org/) | 桌面应用框架 (v33.x) |
+| [electron-updater](https://github.com/nicedoc/electron-updater) | 自动更新 |
 | Vanilla JS | 前端逻辑（无框架依赖） |
 | CSS3 | 样式 & 动画 |
 | Node.js HTTP Server | 内置 API 服务 |
+| sql.js | 本地数据库 |
 
 ---
 
 ## 📝 更新日志
 
-查看完整更新日志：应用内 **⚙️ → 关于 → Changelog** 或访问 [GitHub Releases](https://github.com/baogan/calendar-list/releases)。
+查看完整更新日志：应用内 **⚙️ → 关于 → Changelog** 或访问 [Releases](https://github.com/wsccddyk/todo-list/releases)。
+
+### v9.9.3 (2026-04-19)
+- ✅ 新增公网 IP 一键检测功能（多 API 自动切换，国内友好）
+- ✅ 新增 Gitee / GitHub 服务器延迟实时显示
+- ✅ 修复无 VPN 时 IP 检测失败的问题
+- ✅ 优化更新检查体验：显示等待时间、切换服务器不中断操作
 
 ### v9.8.1 (2026-04-18)
 - ✅ 修复英文模式下日历头星期名和月份仍显示中文的问题
-- ✅ 修复英文模式下"周"列表头、"农历"信息仍为中文的问题
-- ✅ 更新对话框、日志摘要 badge 全面国际化
-- ✅ 更新检查新增 25 秒超时自动断开机制
 - ✅ 新增更新源选择器（GitHub 官方 / ghproxy 镜像 / ghfast 镜像）
 - ✅ 主进程启用系统代理模式，支持 VPN/TUN 访问 GitHub
+- ✅ 新增 25 秒超时自动断开机制
 
 ---
 
 ## 📄 License
 
-MIT License
+[MIT](./LICENSE)
 
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/baogan">爆肝</a>
+  Made with ❤️ by <a href="https://github.com/wsccddyk">爆肝</a> · 
+  <a href="https://gitee.com/yansusu999">Gitee</a>
 </p>
+
+---
+
+<div align="center">
+
+## [English](README_EN.md) | 中文
+
+</div>
