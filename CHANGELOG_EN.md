@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.9.6] - 2026-04-19
+
+### Bug Fixes
+
+- **Hardcoded Version Fix** — `getCurrentVersion()` default value changed from hardcoded `'9.9.3'` to dynamic read; "About" panel version in `index.html` now renders dynamically via `<span id="about-version-value">`. Version number now follows the package, no longer showing old version after updates.
+
+---
+
 ## [9.9.5] - 2026-04-19
 
 ### Bug Fixes
