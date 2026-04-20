@@ -7,6 +7,16 @@
 
 ---
 
+## [9.9.8] - 2026-04-20
+
+### 🐛 Bug 修复
+
+- **init() 崩溃修复** — `getVersionSync()` 函数定义在 `checkAndShowChangelog()` 内部（嵌套作用域），但在 `init()` 中调用导致 `ReferenceError`，整个初始化中断、日历无法渲染
+- **修复**：将 `getVersionSync()` 提升到**顶层函数作用域**，`init()` 调用时增加 try-catch 保护
+- **教训**：Electron preload API 在 DOMContentLoaded 前可能未完全就绪，任何同步调用都必须 try-catch
+
+---
+
 ## [9.9.7] - 2026-04-20
 
 ### 🐛 Bug 修复

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.9.8] - 2026-04-20
+
+### Bug Fixes
+
+- **init() Crash Fix** — `getVersionSync()` was defined inside `checkAndShowChangelog()` (nested scope), calling it from `init()` caused `ReferenceError`, breaking entire initialization and preventing calendar rendering
+- **Fix**: Moved `getVersionSync()` to **top-level function scope**, added try-catch protection around the call in `init()`
+- **Lesson**: Electron preload API may not be fully ready before DOMContentLoaded, all sync calls must be wrapped in try-catch
+
+---
+
 ## [9.9.7] - 2026-04-20
 
 ### Bug Fixes
