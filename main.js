@@ -625,17 +625,19 @@ function createWindow() {
       logInfo('AUTO_START', enabled ? '已启用开机自启动' : '已关闭开机自启动');
       logInfo('AUTO_START', '验证 - openAtLogin: ' + loginSettings.openAtLogin + ', executableWillLaunchAtLogin: ' + loginSettings.executableWillLaunchAtLogin);
 
-      // 二次验证：直接检查注册表值是否正确写入
+      // 二次验证：直接检查注册表值是否正确写入（异步，不阻塞）
       var regValue = null;
       try {
-        regValue = require('child_process').execSync(
+        require('child_process').exec(
           'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "' + (app.name || '任务清单') + '"',
-          { encoding: 'utf8' }
+          { encoding: 'utf8', timeout: 3000 },
+          function(err, stdout) {
+            if (stdout) {
+              logInfo('AUTO_START', '注册表验证:\n' + stdout.trim());
+            }
+          }
         );
-        logInfo('AUTO_START', '注册表验证:\n' + regValue.trim());
-      } catch(e2) {
-        logError('AUTO_START', '注册表读取异常: ' + e2.message);
-      }
+      } catch(e2) {}
 
       return { success: true, verified: loginSettings.openAtLogin === !!enabled };
     } catch(e) {
@@ -668,9 +670,10 @@ function createWindow() {
         // 清除旧名称的注册表条目（如果名称变了）
         if (oldName && oldName !== newName) {
           try {
-            execSync(
+            require('child_process').exec(
               'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "' + oldName.replace(/"/g, '') + '" /f',
-              { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+              { encoding: 'utf8', timeout: 5000 },
+              function(ignored) {}
             );
           } catch(ignored) {}
         }
@@ -786,78 +789,86 @@ function saveCloudSyncConfig(config) {
  *   4. 常见端口扫描（手动检查时才启用，探测 7890/10809 等常见端口）
  */
 /**
- * 通过 Windows 注册表读取系统代理设置（IE/代理软件都会写这里）
- * 返回 proxy server 字符串或 null
+ * 【v9.9.12】异步读取 Windows 注册表代理设置（零阻塞）
+ * 返回 Promise<proxyServer string | null>
  */
 function getWindowsSystemProxy() {
-  try {
-    var execSync = require('child_process').execSync;
-    // 读取 Windows IE 代理设置
-    var result = execSync(
-      'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer',
-      { encoding: 'utf8', timeout: 3000 }
-    );
-    // 输出格式: ProxyServer    REG_SZ    127.0.0.1:7890
-    var match = result.match(/ProxyServer\s+REG_SZ\s+(.+)/);
-    if (match) {
-      var proxyStr = match[1].trim();
-      if (proxyStr && proxyStr.length > 0) {
-        logInfo('PROXY', '[注册表] 发现系统代理: ' + proxyStr);
-        return proxyStr;
-      }
+  return new Promise(function(resolve) {
+    try {
+      require('child_process').exec(
+        'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer',
+        { encoding: 'utf8', timeout: 3000 },
+        function(err, stdout) {
+          if (err || !stdout) { resolve(null); return; }
+          var match = stdout.match(/ProxyServer\s+REG_SZ\s+(.+)/);
+          if (match && match[1] && match[1].trim()) {
+            var proxyStr = match[1].trim();
+            logInfo('PROXY', '[注册表] 发现系统代理: ' + proxyStr);
+            resolve(proxyStr);
+          } else {
+            resolve(null);
+          }
+        }
+      );
+    } catch(e) {
+      logInfo('PROXY', '[注册表] 无法读取（可能无代理或权限不足）');
+      resolve(null);
     }
-    return null;
-  } catch(e) {
-    logInfo('PROXY', '[注册表] 无法读取（可能无代理或权限不足）');
-    return null;
-  }
+  });
 }
 
 /**
- * 检查注册表中 ProxyEnable 是否为 1（代理是否启用）
+ * 【v9.9.12】异步检测注册表中代理是否启用（零阻塞）
+ * 返回 Promise<boolean>
  */
 function isWindowsProxyEnabled() {
-  try {
-    var execSync = require('child_process').execSync;
-    var result = execSync(
-      'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable',
-      { encoding: 'utf8', timeout: 3000 }
-    );
-    var match = result.match(/ProxyEnable\s+REG_DWORD\s+0x(\d+)/);
-    if (match) return match[1] === '1';
-    return false;
-  } catch(e) {
-    return false;
-  }
+  return new Promise(function(resolve) {
+    try {
+      require('child_process').exec(
+        'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable',
+        { encoding: 'utf8', timeout: 3000 },
+        function(err, stdout) {
+          if (err || !stdout) { resolve(false); return; }
+          var match = stdout.match(/ProxyEnable\s+REG_DWORD\s+0x(\d+)/);
+          resolve(match ? match[1] === '1' : false);
+        }
+      );
+    } catch(e) {
+      resolve(false);
+    }
+  });
 }
 
 /**
  * 获取当前可用的代理 URL（供 IP 检测等需要走代理的请求使用）
- * 返回格式: 'http://host:port' 或 null（无代理时直连）
+ * 返回 Promise<'http://host:port' | null>（无代理时直连）
+ * 【v9.9.12】改为异步版本，避免 execSync 阻塞
  */
 function getProxyUrl() {
-  // 优先级1: 用户手动配置
+  // 优先级1: 用户手动配置（同步读文件，很快）
   var config = getCloudSyncConfig();
   if (config.manualProxy && config.manualProxy.trim()) {
-    return normalizeProxyUrl(config.manualProxy);
+    return Promise.resolve(normalizeProxyUrl(config.manualProxy));
   }
   
-  // 优先级2: 系统注册表代理
-  var sysProxy = getWindowsSystemProxy();
-  var proxyEnabled = isWindowsProxyEnabled();
-  if (sysProxy && proxyEnabled) {
-    return normalizeProxyUrl(sysProxy);
-  }
-  
-  // 优先级3: 环境变量
-  var envProxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
-                 process.env.HTTP_PROXY || process.env.http_proxy ||
-                 process.env.ALL_PROXY || process.env.all_proxy;
-  if (envProxy) {
-    return normalizeProxyUrl(envProxy);
-  }
-  
-  return null; // 无代理，直连
+  // 优先级2: 系统注册表代理（异步）
+  return getWindowsSystemProxy().then(function(sysProxy) {
+    return isWindowsProxyEnabled().then(function(proxyEnabled) {
+      if (sysProxy && proxyEnabled) {
+        return normalizeProxyUrl(sysProxy);
+      }
+      
+      // 优先级3: 环境变量
+      var envProxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
+                     process.env.HTTP_PROXY || process.env.http_proxy ||
+                     process.env.ALL_PROXY || process.env.all_proxy;
+      if (envProxy) {
+        return normalizeProxyUrl(envProxy);
+      }
+      
+      return null;
+    });
+  });
 }
 
 function detectAndApplyProxy(forceProbe) {
@@ -879,25 +890,34 @@ function detectAndApplyProxy(forceProbe) {
     });
   }
 
-  // ====== 优先级2：Windows注册表/系统代理 ======
-  // 用 reg 命令直接读 IE 代理设置，不依赖 resolveProxySync
-  var registryProxy = getWindowsSystemProxy();
-  var proxyEnabled = isWindowsProxyEnabled();
+  // ====== 优先级2：Windows注册表/系统代理（异步，零阻塞）======
+  return isWindowsProxyEnabled().then(function(proxyEnabled) {
+    if (proxyEnabled) {
+      return getWindowsSystemProxy().then(function(registryProxy) {
+        if (registryProxy) {
+          var sysProxyUrl = normalizeProxyUrl(registryProxy);
+          logInfo('PROXY', '[P2-注册表] 使用系统注册表代理: ' + sysProxyUrl);
+          return sess.setProxy({
+            mode: 'fixed_servers',
+            proxyRules: extractHostAndPort(sysProxyUrl)
+          }).then(function() {
+            logInfo('PROXY', '[生效] 注册表代理已设置');
+            return 'registry';
+          });
+        }
+        // 有 ProxyEnable 但无 ProxyServer → 继续 system 模式
+        return applySystemOrDirect(forceProbe, sess, 'P2-system (有enable无server)');
+      });
+    }
+    
+    // 注册表没启用代理
+    return applySystemOrDirect(forceProbe, sess, 'P2-system');
+  });
+}
 
-  if (registryProxy && proxyEnabled) {
-    // 注册表有代理地址且已启用 → 直接用 fixed_servers 模式设置
-    var sysProxyUrl = normalizeProxyUrl(registryProxy);
-    logInfo('PROXY', '[P2-注册表] 使用系统注册表代理: ' + sysProxyUrl);
-    return sess.setProxy({
-      mode: 'fixed_servers',
-      proxyRules: extractHostAndPort(sysProxyUrl)
-    }).then(function() {
-      logInfo('PROXY', '[生效] 注册表代理已设置');
-      return 'registry';
-    });
-  }
-
-  logInfo('PROXY', '[P2-system] 未从注册表检测到代理，尝试 system 模式...');
+/** 共享逻辑：system模式 或 direct */
+function applySystemOrDirect(forceProbe, sess, logPrefix) {
+  logInfo('PROXY', '[' + logPrefix + '] 未从注册表检测到代理，尝试 system 模式...');
 
   // 注册表没找到 → 尝试 system 模式（让 Electron 自己处理）
   // 不再用 resolveProxySync 验证（当前 Electron 版本不支持）
@@ -1208,8 +1228,8 @@ function checkForUpdates() {
 
     // 整个 handler 包一层 try-catch，防止 reply was never sent
     try {
-      // 获取当前代理配置
-      var proxyUrl = getProxyUrl();
+      // 【v9.9.12】异步获取代理配置，不阻塞
+      var proxyUrl = await getProxyUrl();
       
     function fetchIP(apiUrl, parseFn) {
       return new Promise(function(resolve, reject) {
@@ -1454,7 +1474,7 @@ function checkForUpdates() {
     // ===== 阶段0：源选择感知 =====
     // 如果是 GitHub 且无代理 → 直接提示需要代理（国内直连必然超时/被墙）
     if (_currentUpdateSource === 'github') {
-      var proxyUrl = getProxyUrl();
+      var proxyUrl = await getProxyUrl(); // 【v9.9.12】异步获取，不阻塞
       if (!proxyUrl) {
         logInfo('UPDATE', 'GitHub源无代理，直接返回提示');
         return { 
@@ -2196,10 +2216,12 @@ function checkForUpdates() {
     }
   });
 
-  // 启动首次自动检查（带30秒超时）
-  checkWithTimeout(30000)
-    .then(info => logInfo('UPDATE', '首次检查完成', info))
-    .catch(err => logError('UPDATE', '首次检查异常', err.message));
+  // 【v9.9.12】移除启动自动检查！原因：
+  // 1. 它在 checkForUpdates() 内部立即执行，与手动检查冲突（两个同时跑）
+  // 2. detectAndApplyProxy 现在是异步的，但这里调用时还没完成代理检测
+  // 3. 用户反馈"点了检查更新没反应"——双检查事件互相覆盖
+  // 正确做法：只在用户主动点击时才检查，或延迟到窗口完全就绪后单独触发
+  // logInfo('UPDATE', '启动自动检查已禁用（避免与手动检查冲突）');
 }
 
 // 双重保险：应用退出前再保存一次（防止close事件被跳过）
