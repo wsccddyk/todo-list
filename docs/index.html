@@ -659,6 +659,27 @@
       margin-bottom: 40px;
     }
 
+    .download-version-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 100px;
+      font-size: 15px;
+      color: var(--accent-light);
+      margin-bottom: 24px;
+      font-weight: 600;
+    }
+
+    .download-version-tag .ver-dot {
+      width: 8px; height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
     .download-actions {
       display: flex;
       justify-content: center;
@@ -677,6 +698,215 @@
       font-size: 13px;
       color: var(--text-secondary);
       margin-top: 24px;
+    }
+
+    /* ===== Download Modal ===== */
+    .dl-modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .dl-modal-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .dl-modal {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 520px;
+      width: 90%;
+      transform: translateY(20px) scale(0.96);
+      transition: transform 0.3s ease;
+    }
+
+    .dl-modal-overlay.active .dl-modal {
+      transform: translateY(0) scale(1);
+    }
+
+    .dl-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+
+    .dl-modal-header h3 {
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .dl-modal-close {
+      width: 36px; height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-secondary);
+      font-size: 18px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .dl-modal-close:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+    }
+
+    .dl-version-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      background: rgba(245, 158, 11, 0.06);
+      border: 1px solid rgba(245, 158, 11, 0.15);
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+
+    .dl-version-info .vi-icon {
+      font-size: 28px;
+    }
+
+    .dl-version-info .vi-text {
+      text-align: left;
+    }
+
+    .dl-version-info .vi-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .dl-version-info .vi-ver {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--accent-light);
+    }
+
+    .dl-version-info .vi-date {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .dl-options {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .dl-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .dl-option:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px rgba(245, 158, 11, 0.15);
+    }
+
+    .dl-option-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .dl-option-icon {
+      width: 44px; height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      background: rgba(245, 158, 11, 0.1);
+      border-radius: 10px;
+    }
+
+    .dl-option-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .dl-option-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .dl-option-arrow {
+      color: var(--text-muted);
+      font-size: 18px;
+      transition: transform 0.2s;
+    }
+
+    .dl-option:hover .dl-option-arrow {
+      transform: translateX(4px);
+      color: var(--accent);
+    }
+
+    .dl-option .dl-size {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .dl-footer-note {
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    .dl-footer-note a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .dl-footer-note a:hover {
+      text-decoration: underline;
+    }
+
+    .dl-loading {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-muted);
+    }
+
+    .dl-loading .spinner {
+      display: inline-block;
+      width: 24px; height: 24px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
 
     /* ===== Footer ===== */
@@ -809,7 +1039,7 @@
         <li><a href="#screenshots">预览</a></li>
         <li><a href="#mcp">AI 对接</a></li>
         <li><a href="#changelog">更新</a></li>
-        <li><a href="https://github.com/wsccddyk/todo-list" class="nav-cta" target="_blank">⬇ 下载</a></li>
+        <li><a href="javascript:void(0)" onclick="openDownloadModal()" class="nav-cta">⬇ 下载</a></li>
       </ul>
     </div>
   </nav>
@@ -832,7 +1062,7 @@
             像桌面小部件一样常驻前台，随时记录你的日程和待办。
           </p>
           <div class="hero-actions">
-            <a href="https://github.com/wsccddyk/todo-list/releases" class="btn-primary" target="_blank">
+            <a href="javascript:void(0)" onclick="openDownloadModal()" class="btn-primary">
               ⬇ 免费下载
             </a>
             <a href="https://github.com/wsccddyk/todo-list" class="btn-secondary" target="_blank">
@@ -1087,11 +1317,15 @@
   <!-- Download -->
   <section class="download-section">
     <div class="container reveal">
+      <div class="download-version-tag">
+        <span class="ver-dot"></span>
+        <span id="download-version-label">最新版本加载中...</span>
+      </div>
       <h2>开始使用</h2>
       <p class="subtitle">免费、开源、解压即用，无需安装</p>
       <div class="download-actions">
-        <a href="https://github.com/wsccddyk/todo-list/releases" class="btn-primary" target="_blank">
-          ⬇ 下载 Windows 版
+        <a href="javascript:void(0)" onclick="openDownloadModal()" class="btn-primary">
+          ⬇ 选择版本下载
         </a>
         <a href="https://github.com/wsccddyk/todo-list" class="btn-secondary" target="_blank">
           💻 查看源码
@@ -1102,6 +1336,22 @@
       </div>
     </div>
   </section>
+
+  <!-- Download Modal -->
+  <div class="dl-modal-overlay" id="dlModal">
+    <div class="dl-modal">
+      <div class="dl-modal-header">
+        <h3>📦 下载任务清单</h3>
+        <button class="dl-modal-close" onclick="closeDownloadModal()">✕</button>
+      </div>
+      <div id="dlModalBody">
+        <div class="dl-loading">
+          <div class="spinner"></div>
+          <p>正在获取版本信息...</p>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Footer -->
   <footer>
@@ -1116,7 +1366,174 @@
   </footer>
 
   <script>
-    // Scroll Reveal
+    // ===== GitHub Releases Data =====
+    const GITHUB_REPO = 'wsccddyk/todo-list';
+    let releasesCache = null;
+
+    async function fetchReleases() {
+      if (releasesCache) return releasesCache;
+      try {
+        const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases`);
+        const data = await resp.json();
+        releasesCache = data;
+        return data;
+      } catch (e) {
+        console.error('Failed to fetch releases:', e);
+        return [];
+      }
+    }
+
+    function formatBytes(bytes) {
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function formatDate(dateStr) {
+      const d = new Date(dateStr);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    // Update version tag on page
+    async function updateVersionTag() {
+      const releases = await fetchReleases();
+      if (releases.length > 0) {
+        const latest = releases[0];
+        const label = document.getElementById('download-version-label');
+        if (label) {
+          label.textContent = `最新版本 ${latest.tag_name} · ${formatDate(latest.published_at)}`;
+        }
+      }
+    }
+
+    // ===== Download Modal =====
+    async function openDownloadModal() {
+      const overlay = document.getElementById('dlModal');
+      const body = document.getElementById('dlModalBody');
+      overlay.classList.add('active');
+      document.body.style.overflow = 'hidden';
+
+      const releases = await fetchReleases();
+
+      if (!releases || releases.length === 0) {
+        body.innerHTML = `
+          <div style="text-align:center; padding: 20px; color: var(--text-secondary);">
+            <p>无法获取版本信息</p>
+            <a href="https://github.com/${GITHUB_REPO}/releases" target="_blank" class="btn-primary" style="margin-top:16px; display:inline-flex;">
+              前往 GitHub 下载
+            </a>
+          </div>`;
+        return;
+      }
+
+      let html = '';
+
+      // Show top 5 releases
+      const showReleases = releases.slice(0, 5);
+
+      showReleases.forEach((release, idx) => {
+        const isLatest = idx === 0;
+
+        // Version info banner (only for latest)
+        if (isLatest) {
+          html += `
+            <div class="dl-version-info">
+              <div class="vi-icon">🚀</div>
+              <div class="vi-text">
+                <div class="vi-label">最新版本</div>
+                <div class="vi-ver">${release.tag_name}</div>
+                <div class="vi-date">${formatDate(release.published_at)}</div>
+              </div>
+            </div>`;
+        }
+
+        // Download options for this release's assets
+        const assets = release.assets || [];
+        const winAssets = assets.filter(a =>
+          a.name.endsWith('.zip') || a.name.endsWith('.exe')
+        );
+
+        if (winAssets.length > 0) {
+          html += `<div class="dl-options">`;
+          winAssets.forEach(asset => {
+            let icon = '📁';
+            let desc = '解压即用';
+            if (asset.name.endsWith('.exe')) {
+              icon = '💿';
+              desc = '安装包';
+            } else if (asset.name.includes('win') || asset.name.includes('Win') || asset.name.includes('Windows')) {
+              icon = '🪟';
+              desc = 'Windows 便携版';
+            }
+
+            html += `
+              <a href="${asset.browser_download_url}" class="dl-option" target="_blank">
+                <div class="dl-option-left">
+                  <div class="dl-option-icon">${icon}</div>
+                  <div>
+                    <div class="dl-option-title">${asset.name}</div>
+                    <div class="dl-option-desc">${desc} · ${formatBytes(asset.size)}</div>
+                  </div>
+                </div>
+                <div class="dl-option-arrow">→</div>
+              </a>`;
+          });
+          html += `</div>`;
+        } else {
+          // No assets, link to release page
+          html += `
+            <div class="dl-options">
+              <a href="${release.html_url}" class="dl-option" target="_blank">
+                <div class="dl-option-left">
+                  <div class="dl-option-icon">📦</div>
+                  <div>
+                    <div class="dl-option-title">${release.tag_name}</div>
+                    <div class="dl-option-desc">${isLatest ? '最新版本' : formatDate(release.published_at)} · 前往 GitHub 下载</div>
+                  </div>
+                </div>
+                <div class="dl-option-arrow">→</div>
+              </a>
+            </div>`;
+        }
+
+        // Changelog preview for latest
+        if (isLatest && release.body) {
+          const lines = release.body.split('\n').filter(l => l.trim()).slice(0, 4);
+          html += `<div style="margin-top: 16px; padding: 14px 18px; background: var(--bg-card); border-radius: 10px; border: 1px solid var(--border);">`;
+          html += `<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">更新内容</div>`;
+          lines.forEach(line => {
+            html += `<div style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">${line.replace(/^[-*]\s*/, '')}</div>`;
+          });
+          html += `</div>`;
+        }
+      });
+
+      // Footer note
+      html += `
+        <div class="dl-footer-note">
+          下载后解压，双击 <strong>任务清单.exe</strong> 即可运行，无需安装。<br/>
+          更多版本请访问 <a href="https://github.com/${GITHUB_REPO}/releases" target="_blank">GitHub Releases</a>
+        </div>`;
+
+      body.innerHTML = html;
+    }
+
+    function closeDownloadModal() {
+      const overlay = document.getElementById('dlModal');
+      overlay.classList.remove('active');
+      document.body.style.overflow = '';
+    }
+
+    // Close modal on overlay click
+    document.getElementById('dlModal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeDownloadModal();
+    });
+
+    // Close modal on ESC
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeDownloadModal();
+    });
+
+    // ===== Scroll Reveal =====
     const reveals = document.querySelectorAll('.reveal');
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -1127,13 +1544,13 @@
     }, { threshold: 0.1 });
     reveals.forEach(el => observer.observe(el));
 
-    // Nav scroll effect
+    // ===== Nav scroll effect =====
     const nav = document.getElementById('nav');
     window.addEventListener('scroll', () => {
       nav.classList.toggle('scrolled', window.scrollY > 50);
     });
 
-    // Smooth scroll for nav links
+    // ===== Smooth scroll for nav links =====
     document.querySelectorAll('a[href^="#"]').forEach(link => {
       link.addEventListener('click', (e) => {
         e.preventDefault();
@@ -1143,6 +1560,9 @@
         }
       });
     });
+
+    // ===== Init =====
+    updateVersionTag();
   </script>
 </body>
 </html>
