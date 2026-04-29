@@ -742,6 +742,38 @@ app.whenReady().then(() => {
     // 旧条目不存在或无法读取 → 无需处理
   }
 
+  // 启动时同步自启路径：如果自启已开启但注册表路径与当前exe不一致，自动更新
+  if (settingsData && settingsData.autoStartup && app.isPackaged) {
+    try {
+      var currentExePath = process.execPath;
+      var regEntry = execSync(
+        'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "' + app.name + '"',
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      if (regEntry && !regEntry.includes(currentExePath)) {
+        logInfo('AUTO_START', '自启路径不一致，更新注册表');
+        logInfo('AUTO_START', '  注册表: ' + regEntry.trim());
+        logInfo('AUTO_START', '  当前exe: ' + currentExePath);
+        app.setLoginItemSettings({
+          openAtLogin: true,
+          name: app.name,
+          path: currentExePath,
+          args: []
+        });
+        logInfo('AUTO_START', '自启路径已同步更新');
+      }
+    } catch(e3) {
+      // 注册表条目不存在或读取失败，重新写入
+      logInfo('AUTO_START', '自启条目缺失，重新写入');
+      app.setLoginItemSettings({
+        openAtLogin: true,
+        name: app.name,
+        path: process.execPath,
+        args: []
+      });
+    }
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();

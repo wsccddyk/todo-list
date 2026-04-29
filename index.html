@@ -87,6 +87,32 @@
     </div>
   </div>
 
+    <!-- 年月快速选择器 -->
+    <div id="month-picker-modal" class="modal hidden">
+      <div class="modal-overlay" id="month-picker-overlay"></div>
+      <div class="month-picker-box">
+        <div class="month-picker-header">
+          <span id="month-picker-title">选择月份</span>
+          <button class="modal-close" id="month-picker-close">✕</button>
+        </div>
+        <div class="month-picker-body">
+          <div class="picker-column">
+            <div class="picker-label">年份</div>
+            <div class="picker-scroll" id="year-scroll"></div>
+          </div>
+          <div class="picker-column">
+            <div class="picker-label">月份</div>
+            <div class="picker-scroll" id="month-scroll"></div>
+          </div>
+        </div>
+        <div class="month-picker-footer">
+          <button class="picker-btn picker-btn-cancel" id="month-picker-cancel">取消</button>
+          <button class="picker-btn picker-btn-today" id="month-picker-today">今天</button>
+          <button class="picker-btn picker-btn-ok" id="month-picker-ok">确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 设置面板 - Tab版本 -->
   <div id="settings-modal" class="modal hidden">
     <div class="modal-overlay" id="settings-overlay"></div>
@@ -494,7 +520,7 @@
         <div class="settings-panel" id="panel-about">
           <div class="about-header-area">
             <h2 class="about-app-name" data-i18n="appName">任务清单</h2>
-            <p class="about-version"><span id="about-version-label" data-i18n="localVersion">本地版本：</span><span id="about-version-value">v9.9.8</span> (<span id="about-version-date">2026-04-29</span>)</p>
+            <p class="about-version"><span id="about-version-label" data-i18n="localVersion">本地版本：</span><span id="about-version-value">v9.9.9</span> (<span id="about-version-date">2026-04-29</span>)</p>
             <p class="about-copyright" data-i18n="copyright">Copyright &copy; 2026 爆肝. All rights reserved.</p>
           </div>
 
